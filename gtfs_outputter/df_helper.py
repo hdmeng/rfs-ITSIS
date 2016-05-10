@@ -11,7 +11,7 @@ def csv2df(csv_file):
 	df.replace('\"', '')
 	return df
 
-def df2sql(dataframe, df_name):
-	con = MySQLdb.connect()
-	# merely to add data
-	dataframe.to_sql(con=con, name=df_name, if_exists='append', flavor='mysql', index=False)
+def df2sql(dataframe, df_name, login, exist_flag='append'):
+	con = MySQLdb.connect(host=login['host'], user=login['user'], passwd=login['passwd'], db=login['db'])
+	dataframe.to_sql(con=con, name=df_name, flavor='mysql', if_exists=exist_flag, index=False)
+	con.close()

@@ -177,7 +177,7 @@ def hasher(file, checksum, blocksize=65536):
 
 def get_realtime(agency, mode):
 	URL = transit_agencies.get(agency, mode)
-	if URL == '':
+	if URL == None:
 		return None
 	response = urllib.urlopen(URL)
 	feed = gtfs_realtime_pb2.FeedMessage()
