@@ -13,5 +13,14 @@ def csv2df(csv_file):
 
 def df2sql(dataframe, df_name, login, exist_flag='append'):
 	con = MySQLdb.connect(host=login['host'], user=login['user'], passwd=login['passwd'], db=login['db'])
+	# seems to have no way to tell what types each column should be
 	dataframe.to_sql(con=con, name=df_name, flavor='mysql', if_exists=exist_flag, index=False)
 	con.close()
+
+def sql2df(df_name, login):
+	con = MySQLdb.connect(host=login['host'], user=login['user'], passwd=login['passwd'], db=login['db'])
+	# takes in no consideration for what the types should be
+	df = pd.read_sql('SELECT * FROM {0}'.format(df_name), con)
+	df.replace('\"', '')
+	con.close()
+	return df

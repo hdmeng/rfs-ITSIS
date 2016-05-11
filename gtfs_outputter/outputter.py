@@ -24,7 +24,7 @@ import df_helper
 import gtfs_helper
 import transit_agencies
 
-def interpret(agency, static_feed, trip_update_feed, alert_feed, vehicle_position_feed, checksum, refresh, login):
+def interpret(agency, static_feed, trip_update_feed, alert_feed, vehicle_position_feed, checksum, refresh, login, local):
 
 	pathname = "./agencies/" + agency + "/processed/"
 	if not path.exists(pathname):
@@ -39,6 +39,35 @@ def interpret(agency, static_feed, trip_update_feed, alert_feed, vehicle_positio
 	def optional_field(index, column, dataframe, default='N/A'):
 		row = dataframe.iloc[index]
 		return row[column] if (column in dataframe.columns and not pd.isnull(row[column])) else default
+
+	def can_read_table(table):
+		if local:
+			return path.exists(pathname + table + '.csv')
+		else:
+			try:
+				with MySQLdb.connect(host=login['host'], user=login['user'], passwd=login['passwd'], db=login['db']) as con:
+					con.execute('SHOW TABLES LIKE \'{0}\''.format(table))
+					return True if con.fetchall() else False
+			except MySQLdb.Error, e:
+				try:
+					logging.debug('MySQL Error {0}: {1}'.format(e.args[0], e.args[1]))
+				except IndexError:
+					logging.debug('MySQL Error: {0}'.format(str(e)))
+				sys.exit(0)
+
+	def read_table(table):
+		if local:
+			with open(pathname + table + '.csv', 'rb') as csvfile:
+				return df_helper.csv2df(csvfile)
+		else:
+			logging.debug('Read from database')
+			return df_helper.sql2df(table, login)
+
+	def write_table(table):
+		if local:
+			tables[table].to_csv(pathname + table + '.csv', sep = ',', index = False)
+		else:
+			df_helper.df2sql(tables[table], table, login=login, exist_flag=('replace' if refresh else 'append'))
 
 	# check if newer timestamp
 	# process entity
@@ -61,9 +90,8 @@ def interpret(agency, static_feed, trip_update_feed, alert_feed, vehicle_positio
 	# PRIMARY KEY ('agency_id')
 	# KEY ('agency_timezone')
 
-	if path.exists(pathname + 'Agency.csv') and not refresh:
-		with open(pathname + 'Agency.csv', 'rb') as csvfile:
-			tables['Agency'] = df_helper.csv2df(csvfile)
+	if can_read_table('Agency') and not refresh:
+		tables['Agency'] = read_table('Agency')
 	else:
 		columns = ['agency_id', 'agency_name', 'agency_url', 'agency_timezone', 'agency_lang', 'agency_phone', 'timezone_name']
 		tables['Agency'] = pd.DataFrame(index=np.r_[0:len(static_feed['agency'].index)], columns=columns)
@@ -78,8 +106,7 @@ def interpret(agency, static_feed, trip_update_feed, alert_feed, vehicle_positio
 			new_row['agency_lang'] = optional_field(i, 'agency_lang', static_feed['agency'])
 			new_row['agency_phone'] = optional_field(i, 'agency_phone', static_feed['agency'])
 			new_row['timezone_name'] = row['agency_timezone']
-		tables['Agency'].to_csv(pathname + 'Agnecy' + ".csv", sep = ',', index = False)
-		df_helper.df2sql(tables['Agency'], 'Agency', login=login, exist_flag=('replace' if refresh else 'append'))
+		write_table('Agency')
 	logging.debug("%s\n%s\n%s\n", 'Agnecy', "----------" * 8, tables['Agency'])
 
 
@@ -419,19 +446,12 @@ def main(argv):
 	agencies = []
 	login={'host': 'localhost', 'user': '', 'passwd': '', 'db': ''}
 	refresh = False
+	local = False
 
-	if '-d' in argv:
-		logging.getLogger().setLevel(logging.DEBUG)
-	if '-i' in argv:
-		logging.getLogger().setLevel(logging.INFO)
-	if '-n' in argv:
-		refresh = True
 	if '-a' in argv:
 		agencies = transit_agencies.agency_dict.keys()
-	if '-u' in argv:
-		user = argv[argv.index('-u') + 1]
-		if user[0] != '-':
-			login['user'] = user
+	if '-d' in argv:
+		logging.getLogger().setLevel(logging.DEBUG)
 	if '-db' in argv:
 		db = argv[argv.index('-db') + 1]
 		if db[0] != '-':
@@ -440,6 +460,16 @@ def main(argv):
 		host = argv[argv.index('-h') + 1]
 		if host[0] != '-':
 			login['host'] = host
+	if '-i' in argv:
+		logging.getLogger().setLevel(logging.INFO)
+	if '-l' in argv:
+		local = True
+	if '-n' in argv:
+		refresh = True
+	if '-u' in argv:
+		user = argv[argv.index('-u') + 1]
+		if user[0] != '-':
+			login['user'] = user
 
 	for key, value in login.iteritems():
 		if value == '':
@@ -449,20 +479,30 @@ def main(argv):
 				login[key] = raw_input("{0}: ".format(key))
 
 	try:
-		con = MySQLdb.connect(host=login['host'], user=login['user'], passwd=login['passwd'])
-		cur = con.cursor()
-		cur.execute('CREATE DATABASE IF NOT EXISTS {0}'.format(login['db']))
+		with MySQLdb.connect(host=login['host'], user=login['user'], passwd=login['passwd']) as con:
+			con.execute('CREATE DATABASE IF NOT EXISTS {0}'.format(login['db']))
 	except MySQLdb.Error, e:
 		try:
 			logging.debug('MySQL Error {0}: {1}'.format(e.args[0], e.args[1]))
 		except IndexError:
 			logging.debug('MySQL Error: {0}'.format(str(e)))
 		sys.exit(0)
-	finally:
-		if cur:
-			cur.close()
-		if con:
-			con.close()
+
+	# try:
+	# 	con = MySQLdb.connect(host=login['host'], user=login['user'], passwd=login['passwd'])
+	# 	cur = con.cursor()
+	# 	cur.execute('CREATE DATABASE IF NOT EXISTS {0}'.format(login['db']))
+	# except MySQLdb.Error, e:
+	# 	try:
+	# 		logging.debug('MySQL Error {0}: {1}'.format(e.args[0], e.args[1]))
+	# 	except IndexError:
+	# 		logging.debug('MySQL Error: {0}'.format(str(e)))
+	# 	sys.exit(0)
+	# finally:
+	# 	if cur:
+	# 		cur.close()
+	# 	if con:
+	# 		con.close()
 
 	if not agencies:
 		# check program conditions
@@ -484,7 +524,7 @@ def main(argv):
 		vehicle_position_feed = gtfs_helper.get_realtime(agency, mode="vehicle_position")
 
 		# process GTFS data
-		interpret(agency, static_feed, trip_update_feed, alert_feed, vehicle_position_feed, checksum, refresh, login)
+		interpret(agency, static_feed, trip_update_feed, alert_feed, vehicle_position_feed, checksum, refresh, login, local)
 
 if __name__ == "__main__":
 	main(sys.argv)
