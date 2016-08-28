@@ -25,10 +25,10 @@ import gtfs_helper
 import transit_agencies
 
 def interpret(agency, static_feed, trip_update_feed, alert_feed, vehicle_position_feed, checksum, refresh, login, local):
-
-	pathname = "./agencies/" + agency + "/processed/"
-	if not path.exists(pathname):
-		os.makedirs(pathname)
+	if local:
+		pathname = "./agencies/" + agency + "/processed/"
+		if not path.exists(pathname):
+			os.makedirs(pathname)
 
 	for fn, df in static_feed.iteritems():
 		logging.debug("%s\n%s\n%s\n", fn, "----------" * 8, df)
@@ -478,15 +478,16 @@ def main(argv):
 			else:
 				login[key] = raw_input("{0}: ".format(key))
 
-	try:
-		with MySQLdb.connect(host=login['host'], user=login['user'], passwd=login['passwd']) as con:
-			con.execute('CREATE DATABASE IF NOT EXISTS {0}'.format(login['db']))
-	except MySQLdb.Error, e:
+	if not local:
 		try:
-			logging.debug('MySQL Error {0}: {1}'.format(e.args[0], e.args[1]))
-		except IndexError:
-			logging.debug('MySQL Error: {0}'.format(str(e)))
-		sys.exit(0)
+			with MySQLdb.connect(host=login['host'], user=login['user'], passwd=login['passwd']) as con:
+				con.execute('CREATE DATABASE IF NOT EXISTS {0}'.format(login['db']))
+		except MySQLdb.Error, e:
+			try:
+				logging.debug('MySQL Error {0}: {1}'.format(e.args[0], e.args[1]))
+			except IndexError:
+				logging.debug('MySQL Error: {0}'.format(str(e)))
+			sys.exit(0)
 
 	# try:
 	# 	con = MySQLdb.connect(host=login['host'], user=login['user'], passwd=login['passwd'])
