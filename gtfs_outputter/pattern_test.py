@@ -39,6 +39,7 @@ stop_idx = 0
 checksum = 0
 patterns = {}
 
+# TODO(erchpito) add some documentations
 for i, row in st.iterrows():
 	trip_id = row['trip_id']
 	dir_id = row['direction_id']
