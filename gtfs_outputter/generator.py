@@ -14,7 +14,8 @@ GENERATOR_AGENCY_ROUTE_ERROR_STRING = 'Please provide a valid route name for the
 GENERATOR_TABLE_ERROR_STRING = 'Please provide a valid task 1 - 3 table name'
 
 def process_feeds(static_feed, trip_update_feed, alert_feed, 
-                  vehicle_position_feed, agencyID, routeID, tables, is_local, should_refresh, agency):
+                  vehicle_position_feed, agencyID, routeID, tables, is_local, 
+                  should_refresh, agency):
     pathname = None
 
     if is_local:
