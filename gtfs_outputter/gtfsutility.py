@@ -1,22 +1,28 @@
-import dataframeutility
-from datetime import datetime
-from google.transit import gtfs_realtime_pb2
 import hashlib
 import logging
 import os
-from os import path
-import requests
-from StringIO import StringIO
-import transit_agencies
 import urllib
 import warnings
 import zipfile
+from datetime import datetime
+from os import path
+from StringIO import StringIO
 
-REQUIRED_GTFS_FILES = ["agency", "stops", "routes", "trips", "stop_times", "calendar"]
-OPTONAL_GTFS_FILES = ["calendar_dates", "fare_attributes", "fare_rules", "shapes", "frequencies", "transfers", "feed_info"]
+import requests
+
+import dataframeutility
+import transit_agencies
+from google.transit import gtfs_realtime_pb2
+
+REQUIRED_GTFS_FILES = ["agency", "stops",
+                       "routes", "trips", "stop_times", "calendar"]
+OPTONAL_GTFS_FILES = ["calendar_dates", "fare_attributes",
+                      "fare_rules", "shapes", "frequencies", "transfers",
+                      "feed_info"]
+
 
 class TripUpdate:
-    
+
     def __init__(self, trip_update):
         self.td = trip_update.trip
         self.stus = trip_update.stop_time_update
@@ -31,7 +37,8 @@ class TripUpdate:
         return self.stus_fv
 
     def process_trip_descriptor(self):
-        fields = ["trip_id", "route_id", "start_time", "start_date", "schedule_relationship"]
+        fields = ["trip_id", "route_id", "start_time",
+                  "start_date", "schedule_relationship"]
         td_fv = {}
         for f in fields:
             if self.td.HasField(f):
@@ -58,7 +65,8 @@ class TripUpdate:
         return stus_fv
 
     def process_stop_time_update(self, stu):
-        fields = ["stop_sequence", "stop_id", "arrival", "departure", "schedule_relationship"]
+        fields = ["stop_sequence", "stop_id", "arrival",
+                  "departure", "schedule_relationship"]
         stu_fv = {}
         for f in fields:
             if (f == "arrival" or f == "departure") and stu.HasField(f):
@@ -68,7 +76,8 @@ class TripUpdate:
                 if isinstance(stu_fv[f], unicode):
                     stu_fv[f] = str(stu_fv[f])
         if "schedule_relationship" not in stu_fv.viewkeys():
-            stu_fv["schedule_relationship"] = gtfs_realtime_pb2.TripUpdate.StopTimeUpdate.SCHEDULED
+            stu_fv[
+                "schedule_relationship"] = gtfs_realtime_pb2.TripUpdate.StopTimeUpdate.SCHEDULED
 
         logging.debug(stu_fv)
 
@@ -83,6 +92,7 @@ class TripUpdate:
 
         return ste_fv
 
+
 class VehiclePosition:
 
     def __init__(self, vehicle_position):
@@ -90,7 +100,8 @@ class VehiclePosition:
         self.position = vehicle_position.position
         self.vehicle = vehicle_position.vehicle
 
-        fields = ["current_stop_sequence", "stop_id", "current_status", "timestamp", "congestion_level"]
+        fields = ["current_stop_sequence", "stop_id",
+                  "current_status", "timestamp", "congestion_level"]
         self.update_dict = {}
         for f in fields:
             if vehicle_position.HasField(f):
@@ -117,7 +128,8 @@ class VehiclePosition:
         return self.update_dict
 
     def process_trip_descriptor(self):
-        fields = ["trip_id", "route_id", "start_time", "start_date", "schedule_relationship"]
+        fields = ["trip_id", "route_id", "start_time",
+                  "start_date", "schedule_relationship"]
         trip_dict = {}
         for f in fields:
             if self.trip.HasField(f):
@@ -127,7 +139,8 @@ class VehiclePosition:
                 if type(trip_dict[f]) == str and trip_dict[f].isdigit():
                     trip_dict[f] = int(trip_dict[f])
         if "schedule_relationship" not in trip_dict.viewkeys():
-            trip_dict["schedule_relationship"] = gtfs_realtime_pb2.TripDescriptor.SCHEDULED
+            trip_dict[
+                "schedule_relationship"] = gtfs_realtime_pb2.TripDescriptor.SCHEDULED
 
         logging.debug(trip_dict)
 
@@ -163,7 +176,10 @@ class VehiclePosition:
 
         return vehicle_dict
 
-# TODO(erchpito): apparently hashlib.md5() is broken or deprecated, an alternative is hashlib.sha256()
+# TODO(erchpito): apparently hashlib.md5() is broken or deprecated, an
+# alternative is hashlib.sha256()
+
+
 def hasher(file, checksum, blocksize=65536):
     buf = file.read(blocksize)
     while len(buf) > 0:
@@ -172,6 +188,7 @@ def hasher(file, checksum, blocksize=65536):
     output = checksum.digest()
     logging.debug("Checksum: {0}".format(output))
     return output
+
 
 def get_realtime(agency, mode):
     URL = transit_agencies.get(agency, mode)
@@ -182,6 +199,7 @@ def get_realtime(agency, mode):
     feed.ParseFromString(response.read())
     return feed
 
+
 def get_static(agency, refresh):
     pathname = "./agencies/" + agency + "/"
     feed = {}
@@ -190,7 +208,7 @@ def get_static(agency, refresh):
     if path.exists(pathname + "raw_csv/") and not refresh:
 
         with open(pathname + "gtfs.zip", "r") as zipout:
-            checksum = hasher(zipout, hashlib.md5()) # did not work
+            checksum = hasher(zipout, hashlib.md5())  # did not work
 
         # read csv files
         for f in os.listdir(pathname + "raw_csv/"):
@@ -206,12 +224,14 @@ def get_static(agency, refresh):
         # if feed_end_date has passed, request new data anyway
         if not get_new_feed:
             if "feed_info" in feed:
-                feed_end_date = dataframeutility.optional_field(0, "feed_end_date", feed['feed_info'], default=feed['calendar'].end_date[0])
+                feed_end_date = dataframeutility.optional_field(
+                    0, "feed_end_date", feed['feed_info'], default=feed['calendar'].end_date[0])
             else:
                 feed_end_date = feed["calendar"].end_date[0]
-            feed_end_date = datetime.strptime(str(feed_end_date),'%Y%m%d')
+            feed_end_date = datetime.strptime(str(feed_end_date), '%Y%m%d')
             current_date = datetime.now()
-            logging.info("feed_end_date = %s", feed_end_date.strftime("%Y%m%d"))
+            logging.info("feed_end_date = %s",
+                         feed_end_date.strftime("%Y%m%d"))
             logging.info("current_date = %s", current_date.strftime("%Y%m%d"))
             get_new_feed = feed_end_date < current_date
 
@@ -220,7 +240,7 @@ def get_static(agency, refresh):
             return feed, checksum
 
     # request GTFS-Static
-    request = requests.get(transit_agencies.get(agency, "static"), stream = True)
+    request = requests.get(transit_agencies.get(agency, "static"), stream=True)
 
     # if unsuccessful
     if request.status_code != 200:
@@ -241,11 +261,12 @@ def get_static(agency, refresh):
 
     z = zipfile.ZipFile(zipdata)
     z.extractall(pathname + "raw/")
-    
+
     # format static feed
     for f in z.namelist():
         with z.open(f) as csvfile:
-            feed[f[:-4]] = dataframeutility.csv2df(csvfile).rename(columns = lambda s: str(s.decode('ascii', 'ignore')))
+            feed[f[:-4]] = dataframeutility.csv2df(csvfile).rename(
+                columns=lambda s: str(s.decode('ascii', 'ignore')))
     for f in REQUIRED_GTFS_FILES:
         if f not in feed:
             logging.error("Incomplete GTFS dataset")
@@ -257,8 +278,7 @@ def get_static(agency, refresh):
     if not path.exists(pathname + "raw_csv/"):
         os.makedirs(pathname + "raw_csv/")
     for fn, df in feed.iteritems():
-        df.to_csv(pathname + "raw_csv/" + fn + ".csv", sep = ',', index = False)
+        df.to_csv(pathname + "raw_csv/" + fn + ".csv", sep=',', index=False)
 
     logging.debug("Read from online")
     return feed, checksum
-    

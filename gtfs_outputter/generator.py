@@ -1,11 +1,12 @@
 #! /usr/bin/python
 
 import code
-import gtfsutility
 import logging
 import os
-from os import path
 import sys
+from os import path
+
+import gtfsutility
 import tableutility
 import transit_agencies
 
@@ -13,8 +14,9 @@ GENERATOR_AGENCY_ERROR_STRING = 'Please provide a valid transit agency name'
 GENERATOR_AGENCY_ROUTE_ERROR_STRING = 'Please provide a valid route name for the given agency'
 GENERATOR_TABLE_ERROR_STRING = 'Please provide a valid task 1 - 3 table name'
 
-def process_feeds(static_feed, trip_update_feed, alert_feed, 
-                  vehicle_position_feed, agencyID, routeID, tables, is_local, 
+
+def process_feeds(static_feed, trip_update_feed, alert_feed,
+                  vehicle_position_feed, agencyID, routeID, tables, is_local,
                   should_refresh, agency):
     pathname = None
 
@@ -53,6 +55,7 @@ def process_feeds(static_feed, trip_update_feed, alert_feed,
     if 'transit_eta' in tables:
         tableUtility.transit_eta()
 
+
 def main(argv):
     logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s')
 
@@ -63,8 +66,8 @@ def main(argv):
     agencyID = None
     route = None
     routeID = None
-    tables = ['agency', 'routes', 'stops', 'route_stop_seq', 'run_pattern', 
-              'schedules', 'route_point_seq', 'points', 'fare', 
+    tables = ['agency', 'routes', 'stops', 'route_stop_seq', 'run_pattern',
+              'schedules', 'route_point_seq', 'points', 'fare',
               'calendar_dates', 'transfers', 'gps_fixes', 'transit_eta']
 
     if len(argv) < 2:
@@ -102,7 +105,7 @@ def main(argv):
 
     if route is not None:
         if transit_agencies.is_valid_route(route, static_feed['routes']):
-            routeID = transit_agencies.get_route_id(route, 
+            routeID = transit_agencies.get_route_id(route,
                                                     static_feed['routes'])
         else:
             logging.error(GENERATOR_AGENCY_ROUTE_ERROR_STRING)
@@ -112,14 +115,13 @@ def main(argv):
     print(trip_update_feed)
     exit()
     alert_feed = gtfsutility.get_realtime(agency, mode='alert')
-    vehicle_position_feed = gtfsutility.get_realtime(agency, 
+    vehicle_position_feed = gtfsutility.get_realtime(agency,
                                                      mode='vehicle_position')
 
     # logging.debug('Arguments: agency - {0}, routeID - {1}, tables - {2}, refresh - {3}, local - {4}'.format(
     #     agency, routeID, tables, refresh, local))
-    process_feeds(static_feed, trip_update_feed, alert_feed, 
+    process_feeds(static_feed, trip_update_feed, alert_feed,
                   vehicle_position_feed, agencyID, routeID, tables, local, refresh, agency)
-        
+
 if __name__ == '__main__':
     main(sys.argv)
-        
