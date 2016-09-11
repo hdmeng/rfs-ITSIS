@@ -11,11 +11,12 @@ import tableutility
 import transit_agencies
 
 GENERATOR_AGENCY_ERROR_STRING = 'Please provide a valid transit agency name'
-GENERATOR_AGENCY_ROUTE_ERROR_STRING = 'Please provide a valid route name for the given agency'
+GENERATOR_AGENCY_ROUTE_ERROR_STRING = ('Please provide a valid route name for '
+                                       'the given agency')
 GENERATOR_TABLE_ERROR_STRING = 'Please provide a valid task 1 - 3 table name'
 
 
-def process_feeds(static_feed, trip_update_feed, alert_feed,
+def process_feeds(static_feed, checksum, trip_update_feed, alert_feed,
                   vehicle_position_feed, agencyID, routeID, tables, is_local,
                   should_refresh, agency):
     pathname = None
@@ -26,7 +27,8 @@ def process_feeds(static_feed, trip_update_feed, alert_feed,
             os.makedirs(pathname)
 
     tableUtility = tableutility.TableUtility(
-        agencyID, routeID, static_feed, trip_update_feed, alert_feed, vehicle_position_feed, is_local, pathname, should_refresh)
+        agencyID, routeID, static_feed, checksum, trip_update_feed, alert_feed,
+        vehicle_position_feed, is_local, pathname, should_refresh)
 
     if 'agency' in tables:
         tableUtility.agency()
@@ -48,8 +50,8 @@ def process_feeds(static_feed, trip_update_feed, alert_feed,
     #   tableUtility.fare()
     # if 'calendar_dates' in tables:
     #   tableUtility.calendar_dates()
-    if 'transfers' in tables:
-        tableUtility.transfers()
+    # if 'transfers' in tables:
+    #     tableUtility.transfers()
     if 'gps_fixes' in tables:
         tableUtility.gps_fixes()
     if 'transit_eta' in tables:
@@ -112,16 +114,13 @@ def main(argv):
             return
 
     trip_update_feed = gtfsutility.get_realtime(agency, mode='trip_update')
-    print(trip_update_feed)
-    exit()
     alert_feed = gtfsutility.get_realtime(agency, mode='alert')
     vehicle_position_feed = gtfsutility.get_realtime(agency,
                                                      mode='vehicle_position')
 
-    # logging.debug('Arguments: agency - {0}, routeID - {1}, tables - {2}, refresh - {3}, local - {4}'.format(
-    #     agency, routeID, tables, refresh, local))
-    process_feeds(static_feed, trip_update_feed, alert_feed,
-                  vehicle_position_feed, agencyID, routeID, tables, local, refresh, agency)
+    process_feeds(static_feed, checksum, trip_update_feed, alert_feed,
+                  vehicle_position_feed, agencyID, routeID, tables, local,
+                  refresh, agency)
 
 if __name__ == '__main__':
     main(sys.argv)

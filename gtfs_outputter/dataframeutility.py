@@ -1,5 +1,6 @@
 import logging
 from os import path
+import sys
 
 import MySQLdb
 import pandas as pd
@@ -30,9 +31,10 @@ def sql2df(df_name, login):
     return df
 
 
-def optional_field(index, column, dataframe, default='N/A'):
+def optional_field(index, column, dataframe, cast=str, default=None):
     row = dataframe.iloc[index]
-    return row[column] if (column in dataframe.columns and not pd.isnull(row[column])) else default
+    return cast(row[column]) if (column in dataframe.columns and
+                                 not pd.isnull(row[column])) else default
 
 
 def can_read_dataframe(df_name, login, is_local, pathname):
@@ -40,8 +42,9 @@ def can_read_dataframe(df_name, login, is_local, pathname):
         return path.exists(pathname + df_name + '.csv')
     else:
         try:
-            with MySQLdb.connect(host=login['host'], user=login['user'],
-                                 passwd=login['passwd'], db=login['db']) as con:
+            with MySQLdb.connect(
+                    host=login['host'], user=login['user'],
+                    passwd=login['passwd'], db=login['db']) as con:
                 con.execute('SHOW TABLES LIKE \'{0}\''.format(df_name))
                 return True if con.fetchall() else False
         except MySQLdb.Error, e:
@@ -50,7 +53,7 @@ def can_read_dataframe(df_name, login, is_local, pathname):
                     e.args[0], e.args[1]))
             except IndexError:
                 logging.debug('MySQL Error: {0}'.format(str(e)))
-            sys.exit(0)
+            sys.exit(1)
 
 
 def read_dataframe(df_name, login, is_local, pathname):

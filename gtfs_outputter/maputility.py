@@ -18,8 +18,8 @@ def get_heading(a_lat, a_lon, b_lat, b_lon):
     diffLong = math.radians(b_lon - a_lon)
 
     x = math.sin(diffLong) * math.cos(lat2)
-    y = math.cos(lat1) * math.sin(lat2) - (math.sin(lat1)
-                                           * math.cos(lat2) * math.cos(diffLong))
+    y = math.cos(lat1) * math.sin(lat2) - (math.sin(lat1) * math.cos(lat2) *
+                                           math.cos(diffLong))
 
     initial_bearing = math.atan2(x, y)
 
