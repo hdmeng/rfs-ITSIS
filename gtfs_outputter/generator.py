@@ -59,7 +59,8 @@ def process_feeds(static_feed, checksum, trip_update_feed, alert_feed,
 
 
 def main(argv):
-    logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s')
+    logging.basicConfig(format=('%(asctime)s [%(levelname)s] '
+                                '(%(threadName)-9s): %(message)s'))
 
     refresh = False
     local = False

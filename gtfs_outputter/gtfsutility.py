@@ -183,9 +183,6 @@ class VehiclePosition:
 
         return vehicle_dict
 
-# TODO(erchpito): apparently hashlib.md5() is broken or deprecated, an
-# alternative is hashlib.sha256()
-
 
 def hasher(file, checksum, blocksize=65536):
     buf = file.read(blocksize)
@@ -214,9 +211,6 @@ def get_static(agency, refresh):
 
     if path.exists(pathname + 'raw_csv/') and not refresh:
 
-        # with open(pathname + 'gtfs.zip', 'r') as zipout:
-        #     checksum = hasher(zipout, hashlib.md5())
-
         def read_in_chunks(file_object, chunk_size=1024):
             while True:
                 data = file_object.read(chunk_size)
@@ -228,7 +222,7 @@ def get_static(agency, refresh):
         with open(pathname + 'gtfs.zip', 'rb') as zipout:
             for chunk in read_in_chunks(zipout):
                 hasher.update(chunk)
-        checksum = hasher.hexdigest()  # did not work
+        checksum = hasher.hexdigest()
 
         # read csv files
         for f in os.listdir(pathname + 'raw_csv/'):

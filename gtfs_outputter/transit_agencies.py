@@ -55,7 +55,7 @@ def is_valid_agency(agency):
 
 
 def is_valid_route(route, route_table):
-    if route in route_table.route_id.values:
+    if route in route_table.route_id.apply(str).values:
         return True
     # TODO(erchpito) why is the apply(str) needed to suppress the warning
     elif route in route_table.route_short_name.values:
@@ -67,7 +67,7 @@ def is_valid_route(route, route_table):
 
 
 def get_route_id(route, route_table):
-    if route in route_table.route_id.values:
+    if route in route_table.route_id.apply(str).values:
         return route
     # TODO(erchpito) add case-insensitive comparison, look into casefolding
     elif route in route_table.route_short_name.values:

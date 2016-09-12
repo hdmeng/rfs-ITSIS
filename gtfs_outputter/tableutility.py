@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 import time
+import timeit
 from datetime import datetime
 from os import path
 
@@ -72,7 +73,9 @@ class TableUtility:
         self.vehicle_position_feed = vehicle_position_feed
         self.is_local = is_local
         self.pathname = pathname
-        self.should_refresh = should_refresh
+        # self.should_refresh = should_refresh
+        # TODO(erchpito) change this back
+        self.should_refresh = True
 
     # MARK: HELPER FUNCTIONS
 
@@ -106,7 +109,7 @@ class TableUtility:
         return n_time + delay
 
     def generate_table(self, table_name, table, setup_row_func, rows=None,
-                       entities=None):
+                       entities=None, row_collector=None):
         """Loads the requested table into self.tables.
 
         If possible, the table will be fetched from a database or
@@ -130,7 +133,10 @@ class TableUtility:
             self.tables[table_name] = dataframeutility.read_dataframe(
                 table_name, self.LOGIN, self.is_local, self.pathname)
         else:
-            self.tables[table_name] = table
+            if row_collector is None:
+                self.tables[table_name] = table
+
+            start = timeit.default_timer()
 
             if rows is not None:
                 for i, row in rows.iterrows():
@@ -138,6 +144,12 @@ class TableUtility:
             elif entities is not None:
                 for entity in entities:
                     setup_row_func(entity)
+
+            if row_collector is not None:
+                self.tables[table_name] = pd.DataFrame(row_collector)
+
+            stop = timeit.default_timer()
+            logging.debug('runtime: {0}'.format(stop - start))
 
             dataframeutility.write_dataframe(
                 self.tables[table_name], table_name, self.LOGIN, self.is_local,
@@ -185,7 +197,8 @@ class TableUtility:
         columns = ['agency_id', 'route_short_name', 'route_dir', 'route_type',
                    'route_long_name', 'route_desc', 'route_url', 'route_color',
                    'route_text_color', 'route_id', 'version']
-        table = pd.DataFrame()
+        table = None
+        row_collector = []
 
         def routes_row_func(i, row):
 
@@ -219,11 +232,11 @@ class TableUtility:
                     default='000000').upper()
                 new_row['route_id'] = str(row['route_id'])
                 new_row['version'] = self.checksum
-                self.tables[table_name] = self.tables[table_name].append(
-                    pd.Series(new_row), ignore_index=True)
+                row_collector.append(new_row)
 
         self.generate_table(table_name, table, routes_row_func,
-                            rows=self.static_feed['routes'])
+                            rows=self.static_feed['routes'],
+                            row_collector=row_collector)
 
     def stops(self):
         """Loads the Stops table into self.tables.
@@ -275,6 +288,16 @@ class TableUtility:
     # thus there's no way to link shapes to patterns
     # RESPONSE: make a warning whenever shape_id is not
     # there use null. Don't generate tables that need such
+    # TODO(erchpito) if you want an additional speed increase
+    # consider using trips to supply the rows, and sort trips and stop_times
+    # by order of trip_id.
+    # feed['trips'].sort_values('trip_id').reset_index(drop=True)
+    # (feed['stop_times'].sort_values(
+    #  ['trip_id', 'stop_sequence']).reset_index(drop=True))
+    # going through the entries will be linear, with the only jumping happening
+    # in the comparatively small routes table. This however cannot be done
+    # as an indepedent task and get parallelized. This would also be quite slow
+    # for looking at one route, since it must iterate through all stops still
     def route_stop_seq(self):
         """Loads the Route_stop_seq table into self.tables.
 
@@ -284,14 +307,15 @@ class TableUtility:
         table_name = 'Route_stop_seq'
         columns = ['agency_id', 'route_short_name', 'route_dir', 'pattern_id',
                    'stop_id', 'seq', 'is_time_point', 'version']
-        table = pd.DataFrame()
+        table = None
+        row_collector = []
 
         # If a routeID has been given, fetch the rows in the routes table
         # pertaining to that route. Otherwise, use the whole routes table.
 
         if self.routeID is not None:
             route_rows = self.static_feed['routes'].loc[
-                self.static_feed['routes'].route_id == self.routeID]
+                self.static_feed['routes'].route_id.apply(str) == self.routeID]
         else:
             route_rows = self.static_feed['routes']
 
@@ -300,6 +324,7 @@ class TableUtility:
         def route_stop_seq_row_func(i, row):
             route_id = row['route_id']
             patterns = []
+            new_pattern = False
 
             # Iterate through all the trips that run on a given route and
             # generate rows for each stop on those trips.
@@ -317,7 +342,6 @@ class TableUtility:
                 # If a sequence of stops and its shape_id is unique, assign it
                 # a new pattern_id. Otherwise fetch the existing pattern_id.
 
-                # sequence = trip_id_block['stop_id'].tolist()
                 sequence = trip_id_block['stop_id'].tolist()
                 if 'shape_id' in subrow and not pd.isnull(subrow['shape_id']):
                     sequence.append(subrow['shape_id'])
@@ -325,6 +349,9 @@ class TableUtility:
                     missing_shape_id = True
                 if str(sequence) not in patterns:
                     patterns += [str(sequence)]
+                    new_pattern = True
+                else:
+                    new_pattern = False
                 pattern_num = patterns.index(str(sequence)) + 1
                 route_short_name = dataframeutility.optional_field(
                     i, 'route_short_name', self.static_feed['routes'],
@@ -335,34 +362,38 @@ class TableUtility:
 
                 # Generate rows for each stop in on a trip for a given route.
 
-                for k, subsubrow in trip_id_block.iterrows():
-                    new_row = {}
-                    new_row['agency_id'] = self.agencyID
-                    new_row['route_short_name'] = route_short_name
-                    new_row['route_dir'] = direction_id
-                    new_row['pattern_id'] = pattern_id
-                    new_row['stop_id'] = str(subsubrow['stop_id'])
-                    new_row['seq'] = subsubrow['stop_sequence']
-                    new_row['is_time_point'] = dataframeutility.optional_field(
-                        k, 'timepoint', self.static_feed['stop_times'],
-                        cast=int, default=0)
-                    new_row['version'] = self.checksum
-                    self.tables[table_name] = self.tables[table_name].append(
-                        pd.Series(new_row), ignore_index=True)
+                if new_pattern:
+                    logging.debug(pattern_id)
+                    for k, subsubrow in trip_id_block.iterrows():
+                        new_row = {}
+                        new_row['agency_id'] = self.agencyID
+                        new_row['route_short_name'] = route_short_name
+                        new_row['route_dir'] = direction_id
+                        new_row['pattern_id'] = pattern_id
+                        new_row['stop_id'] = str(subsubrow['stop_id'])
+                        new_row['seq'] = subsubrow['stop_sequence']
+                        new_row['is_time_point'] = (
+                            dataframeutility.optional_field(
+                                k, 'timepoint', self.static_feed['stop_times'],
+                                cast=int, default=0)
+                        )
+                        new_row['version'] = self.checksum
+                        row_collector.append(new_row)
                 self.trip2pattern[trip_id] = pattern_id
                 # TODO(erchpito) is this really the case?
-                self.shape2pattern[subrow['shape_id']] = pattern_id
+                # self.shape2pattern[subrow['shape_id']] = pattern_id
 
         self.generate_table(table_name, table,
-                            route_stop_seq_row_func, rows=route_rows)
+                            route_stop_seq_row_func, rows=route_rows,
+                            row_collector=row_collector)
 
         # TODO(erchpito) figure out how to do this if it were on the database
         if not self.trip2pattern:
-            with open(self.pathname + 'Trip2Pattern_2.csv', 'rb') as f:
+            with open(self.pathname + 'Trip2Pattern.csv', 'rb') as f:
                 reader = csv.reader(f)
                 trip2pattern = dict(reader)
         else:
-            with open(self.pathname + 'Trip2Pattern_2.csv', 'wb') as f:
+            with open(self.pathname + 'Trip2Pattern.csv', 'wb') as f:
                 writer = csv.writer(f)
                 for key, value in self.trip2pattern.items():
                     writer.writerow([key, value])
@@ -607,7 +638,8 @@ class TableUtility:
             return
         columns = ['agency_id', 'point_id', 'point_lat', 'point_lon',
                    'lat_lon', 'version']
-        table = pd.DataFrame()
+        table = None
+        row_collector = []
 
         waypoints = []
 
@@ -627,12 +659,11 @@ class TableUtility:
             # TODO(erchpito) figure out lat_lon calculation
             new_row['lat_lon'] = None
             new_row['version'] = self.checksum
-
-            self.tables[table_name] = self.tables[table_name].append(
-                pd.Series(new_row), ignore_index=True)
+            row_collector.append(new_row)
 
         self.generate_table(table_name, table, points_row_func,
-                            rows=self.static_feed['shapes'])
+                            rows=self.static_feed['shapes'],
+                            row_collector=row_collector)
 
     # TODO(erchpito) fare_rules and fare_attributes are optional tables in
     # static GTFS
@@ -683,7 +714,7 @@ class TableUtility:
                    'version']
         table = pd.DataFrame()
 
-        def calendar_dates_row_func(i, row):
+        def calendar_dates_row_func(i, row, lock=None):
             pass
 
         # self.generate_table(table_name, table, calendar_dates_row_func,
@@ -703,7 +734,8 @@ class TableUtility:
         table_name = 'Transfers'
         columns = ['from_agency_id', 'from_id', 'to_agency_id', 'to_id',
                    'transfer_type', 'min_transfer_time', 'transfer_dist']
-        table = pd.DataFrame()
+        table = None
+        row_collector = []
 
         if 'Route_stop_seq' not in self.tables:
             self.route_stop_seq()
@@ -794,16 +826,13 @@ class TableUtility:
                     new_row['transfer_type'] = tranfer_type
                     new_row['min_transfer_time'] = min_transfer_time
                     new_row['transfer_dist'] = transfer_dist
-
-                    self.tables[table_name] = self.tables[table_name].append(
-                        pd.Series(new_row), ignore_index=True)
+                    row_collector.append(new_row)
 
         self.generate_table(table_name, table, transfers_row_func,
-                            rows=self.tables['Route_stop_seq'])
+                            rows=self.tables['Route_stop_seq'],
+                            row_collector=row_collector)
 
     # MARK: TASK 3
-
-    #
 
     def gps_fixes(self):
         """Loads the gps_fixes table into self.tables.
@@ -814,7 +843,8 @@ class TableUtility:
         table_name = 'gps_fixes'
         columns = ['agency_id', 'veh_id', 'RecordedDate', 'RecordedTime',
                    'UTC_at_date', 'latitude', 'longitude', 'speed', 'course']
-        table = pd.DataFrame()
+        table = None
+        row_collector = []
 
         def gps_fixes_row_func(entity):
             update = gtfsutility.VehiclePosition(entity.vehicle)
@@ -845,15 +875,15 @@ class TableUtility:
                 position and 'speed' in position) else -1)
             new_row['course'] = float(position['bearing'] if (
                 position and 'bearing' in position) else -1)
-            self.tables[table_name] = self.tables[table_name].append(
-                pd.Series(new_row), ignore_index=True)
+            row_collector.append(new_row)
 
             # TODO(erchpito) figure out what to do with this
             if (trip and 'trip_id' in trip) and (vehicle and 'id' in vehicle):
                 self.trip2vehicle[trip['trip_id']] = vehicle['id']
 
         self.generate_table(table_name, table, gps_fixes_row_func,
-                            entities=self.vehicle_position_feed.entity)
+                            entities=self.vehicle_position_feed.entity,
+                            row_collector=row_collector)
 
     # TODO(erchpito) is this suppose to contain a row for every stop, or just
     # ones that have updated times?
@@ -868,7 +898,8 @@ class TableUtility:
                    'veh_lat', 'veh_lon', 'veh_speed', 'veh_location_time',
                    'route_short_name', 'route_dir', 'day', 'run', 'pattern_id',
                    'stop_id', 'seq', 'ETA']
-        table = pd.DataFrame()
+        table = None
+        row_collector = []
 
         if 'Route_stop_seq' not in self.tables:
             self.route_stop_seq()
@@ -955,11 +986,9 @@ class TableUtility:
                         new_row['ETA'] = (datetimeFromHMS(
                                           stop['departure_time']) +
                                           delay).strftime('%H:%M:%S')
-                        self.tables[table_name] = (
-                            self.tables[table_name].append(
-                                pd.Series(new_row), ignore_index=True)
-                        )
+                        row_collector.append(new_row)
                         stop_seq += 1
 
         self.generate_table(table_name, table, transit_eta,
-                            entities=self.trip_update_feed.entity)
+                            entities=self.trip_update_feed.entity,
+                            row_collector=row_collector)
