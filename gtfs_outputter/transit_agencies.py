@@ -17,11 +17,12 @@ agency_dict = {
              'http://www.bart.gov/dev/schedules/google_transit.zip',
              'http://api.bart.gov/gtfsrt/alerts.aspx',
              'http://api.bart.gov/gtfsrt/tripupdate.aspx',
-             'http://api.transitime.org/api/v1/key/5ec0de94/agency/bart/command/gtfs-rt/vehiclePositions'],
+             None],
     'tri_delta': [11,
                   'http://70.232.147.132/rtt/public/utility/gtfs.aspx',
                   'http://70.232.147.132/rtt/public/utility/gtfsrealtime.aspx/alert',
-                  'http://70.232.147.132/rtt/public/utility/gtfsrealtime.aspx/tripupdate'],
+                  'http://70.232.147.132/rtt/public/utility/gtfsrealtime.aspx/tripupdate',
+                  None],
     'vta': [10,
             'http://api.511.org/transit/datafeeds?api_key=b5cb0334-749b-40ee-bcfb-98338d3ec5fc&operator_id=SC',
             None,
@@ -40,11 +41,11 @@ def get(agency, field):
         return agency_dict[agency][0]
     elif field == 'static':
         return agency_dict[agency][1]
-    elif field == 'alert' and len(agency_dict[agency]) > 2:
+    elif field == 'alert':
         return agency_dict[agency][2]
-    elif field == 'trip_update' and len(agency_dict[agency]) > 3:
+    elif field == 'trip_update':
         return agency_dict[agency][3]
-    elif field == 'vehicle_position' and len(agency_dict[agency]) > 4:
+    elif field == 'vehicle_position':
         return agency_dict[agency][4]
     else:
         return None

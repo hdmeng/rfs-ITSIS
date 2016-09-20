@@ -5,6 +5,7 @@ import sys
 import time
 import timeit
 from datetime import datetime
+from datetime import timedelta
 from os import path
 
 import googlemaps
@@ -15,6 +16,7 @@ import pytz
 
 import dataframeutility
 import gtfsutility
+import maputility
 
 
 class TableUtility:
@@ -363,7 +365,6 @@ class TableUtility:
                 # Generate rows for each stop in on a trip for a given route.
 
                 if new_pattern:
-                    logging.debug(pattern_id)
                     for k, subsubrow in trip_id_block.iterrows():
                         new_row = {}
                         new_row['agency_id'] = self.agencyID
@@ -381,7 +382,7 @@ class TableUtility:
                         row_collector.append(new_row)
                 self.trip2pattern[trip_id] = pattern_id
                 # TODO(erchpito) is this really the case?
-                # self.shape2pattern[subrow['shape_id']] = pattern_id
+                self.shape2pattern[subrow['shape_id']] = pattern_id
 
         self.generate_table(table_name, table,
                             route_stop_seq_row_func, rows=route_rows,
@@ -441,9 +442,9 @@ class TableUtility:
             calendar = self.static_feed['calendar'].loc[self.static_feed[
                 'calendar']['service_id'] == row['service_id']].iloc[0]
             table.set_value(i, 'start_date', datetime.strptime(
-                str(calendar['start_date']), "%Y%m%d"))
+                str(calendar['start_date']), "%Y%m%d").strftime('%Y-%m-%d'))
             table.set_value(i, 'end_date', datetime.strptime(
-                str(calendar['end_date']), "%Y%m%d"))
+                str(calendar['end_date']), "%Y%m%d").strftime('%Y-%m-%d'))
             table.set_value(i, 'day', '{0}{1}{2}{3}{4}{5}{6}'.format(
                 calendar['monday'], calendar['tuesday'], calendar['wednesday'],
                 calendar['thursday'], calendar['friday'], calendar['saturday'],
@@ -524,8 +525,8 @@ class TableUtility:
             table.set_value(i, 'version', runPattern_entry['version'])
 
             route_stop_seq_entry = (self.tables['Route_stop_seq'].loc[
-                                    self.tables['Route_stop_seq']['stop_id'] ==
-                                    row['stop_id']].iloc[0])
+                                   (self.tables['Route_stop_seq']['stop_id'] ==
+                                    row['stop_id']) & (self.tables['Route_stop_seq']['pattern_id'] == runPattern_entry['pattern_id'])].iloc[0])
             table.set_value(i, 'seq', route_stop_seq_entry['seq'])
             table.set_value(i, 'stop_id', route_stop_seq_entry['stop_id'])
             table.set_value(i, 'is_time_point',
@@ -546,9 +547,8 @@ class TableUtility:
         self.generate_table(table_name, table, schedules_row_func,
                             rows=self.static_feed['stop_times'])
 
-    # TODO(erchpito) shapes is an optional table in static GTFS
     def route_point_seq(self):
-        """Loads the Route_point_seq table into self.tables.
+        """Loads the Route_point_seq table into self.tables (optional).
 
         Setups arguments for self.generate_table to match the description of
         the Route_point_seq table as described in Task 1.
@@ -557,6 +557,7 @@ class TableUtility:
         if 'shapes' not in self.static_feed:
             logging.warning(('FAILURE could not compute {0} without the'
                              '\'{1}\' table').format(table_name, 'shapes'))
+            self.tables[table_name] = None
             return
         columns = ['agency_id', 'route_short_name', 'route_dir', 'pattern_id',
                    'shape_id', 'point_id', 'seq', 'length', 'heading', 'dist',
@@ -572,11 +573,15 @@ class TableUtility:
 
         route_stop_seq_entry_memo = {}
         last_point = None
+        total_dist = 0
 
         def route_point_seq_row_func(i, row):
             # Since many rows will require the same data from the
             # route_stop_seq table, this memoizes the entry needed based on the
             # shape_id
+
+            global last_point
+            global total_dist
 
             if row['shape_id'] not in route_stop_seq_entry_memo:
                 # TODO(erchpito) make this dictionary
@@ -596,11 +601,14 @@ class TableUtility:
                             route_stop_seq_entry['pattern_id'])
             table.set_value(i, 'version', route_stop_seq_entry['version'])
 
-            points_entry = (self.tables['Points'].loc[
-                            (self.tables['Points']['point_lat'] ==
-                             row['shape_pt_lat']) &
-                            (self.tables['Points']['point_lon'] ==
-                             row['shape_pt_lon'])].iloc[0])
+            if self.tables['Points'] is not None:
+                points_entry = (self.tables['Points'].loc[
+                                (self.tables['Points']['point_lat'] ==
+                                 row['shape_pt_lat']) &
+                                (self.tables['Points']['point_lon'] ==
+                                 row['shape_pt_lon'])].iloc[0])
+            else:
+                points_entry = {'point_id': None}
             table.set_value(i, 'point_id', points_entry['point_id'])
 
             table.set_value(i, 'shape_id', row['shape_id'])
@@ -624,9 +632,8 @@ class TableUtility:
             table_name, table, route_point_seq_row_func,
             rows=self.static_feed['shapes'])
 
-    # TODO(erchpito) shapes is an optional table in static GTFS
     def points(self):
-        """Loads the Points table into self.tables.
+        """Loads the Points table into self.tables (optional).
 
         Setups arguments for self.generate_table to match the description of
         the Points table as described in Task 1.
@@ -635,6 +642,7 @@ class TableUtility:
         if 'shapes' not in self.static_feed:
             logging.warning(('FAILURE could not compute {0} without the'
                              '\'{1}\' table').format(table_name, 'shapes'))
+            self.tables[table_name] = None
             return
         columns = ['agency_id', 'point_id', 'point_lat', 'point_lon',
                    'lat_lon', 'version']
@@ -665,10 +673,8 @@ class TableUtility:
                             rows=self.static_feed['shapes'],
                             row_collector=row_collector)
 
-    # TODO(erchpito) fare_rules and fare_attributes are optional tables in
-    # static GTFS
     def fare(self):
-        """Loads the Fare table into self.tables.
+        """Loads the Fare table into self.tables (optional).
 
         Setups arguments for self.generate_table to match the description of
         the Fare table as described in Task 1.
@@ -678,11 +684,13 @@ class TableUtility:
             logging.warning(
                 ('FAILURE could not compute {0} without the'
                     '\'{1}\' table').format(table_name, 'fare_rules'))
+            self.tables[table_name] = None
             return
         if 'fare_attributes' not in self.static_feed:
             logging.warning(
                 ('FAILURE could not compute {0} without the'
                     '\'{1}\' table').format(table_name, 'fare_attributes'))
+            self.tables[table_name] = None
             return
         columns = ['agency_id', 'route_short_name', 'route_dir', 'pattern_id',
                    'price', 'currency_type', 'payment_method', 'origin_id',
@@ -696,9 +704,8 @@ class TableUtility:
         # self.generate_table(table_name, table, fare_row_func,
         #                     rows=self.static_feed['fare_rules'])
 
-    # TODO(erchpito) calendar_dates is an optional table in static GTFS
     def calendar_dates(self):
-        """Loads the Calendar_dates table into self.tables.
+        """Loads the Calendar_dates table into self.tables (optional).
 
         Setups arguments for self.generate_table to match the description of
         the Calendar_dates table as described in Task 1.
@@ -708,6 +715,7 @@ class TableUtility:
             logging.warning(
                 ('FAILURE could not compute {0} without the'
                     '\'{1}\' table').format(table_name, 'calendar_dates'))
+            self.tables[table_name] = None
             return
         columns = ['agency_id', 'route_short_name', 'special_date',
                    'route_dir', 'run', 'exception_type', 'day', 'service_id',
@@ -835,12 +843,19 @@ class TableUtility:
     # MARK: TASK 3
 
     def gps_fixes(self):
-        """Loads the gps_fixes table into self.tables.
+        """Loads the gps_fixes table into self.tables (optional).
 
         Setups arguments for self.generate_table to match the description of
         the gps_fixes table as described in Task 3.
         """
         table_name = 'gps_fixes'
+        if (self.vehicle_position_feed is None or
+           not self.vehicle_position_feed.entity):
+            logging.warning(('FAILURE could not compute {0} without the'
+                             '\'{1}\' feed').format(table_name,
+                                                    'vehicle positions'))
+            self.tables[table_name] = None
+            return
         columns = ['agency_id', 'veh_id', 'RecordedDate', 'RecordedTime',
                    'UTC_at_date', 'latitude', 'longitude', 'speed', 'course']
         table = None
@@ -887,6 +902,8 @@ class TableUtility:
 
     # TODO(erchpito) is this suppose to contain a row for every stop, or just
     # ones that have updated times?
+    # TODO(erchpito) how do we handle situations where the vehicle corrects
+    # itself? do we update the entire table to reflect it caught up?
     def transit_eta(self):
         """Loads the TransitETA table into self.tables.
 
@@ -901,12 +918,8 @@ class TableUtility:
         table = None
         row_collector = []
 
-        if 'Route_stop_seq' not in self.tables:
-            self.route_stop_seq()
         if 'RunPattern' not in self.tables:
             self.run_pattern()
-        if 'Route_point_seq' not in self.tables:
-            self.route_point_seq()
         if 'gps_fixes' not in self.tables:
             self.gps_fixes()
 
@@ -918,16 +931,26 @@ class TableUtility:
             trip_id = trip_descriptor['trip_id']
             runPattern_entry = self.tables['RunPattern'].loc[
                 self.tables['RunPattern']['trip_id'] == trip_id].iloc[0]
-            # trip_update can include the veh_id, not always an int
-            veh_id = int(self.trip2vehicle[trip_id])
-            gps_fixes_entry = self.tables['gps_fixes'].loc[
-                self.tables['gps_Fixes']['veh_id'] == veh_id].iloc[0]
-            s = datetime.strptime(
-                '{0} {1}'.format(
-                    gps_fixes_entry['UTC_at_date'],
-                    gps_fixes_entry['UTC_at_time']),
-                '%Y-%m-%d %H:%M:%S')
-            timestamp = time.mktime(s.timetuple())
+
+            if self.tables['gps_fixes'] is not None:
+                # TODO(erchpito) trip_update can include the veh_id, not always
+                # an int
+                veh_id = int(self.trip2vehicle[trip_id])
+                gps_fixes_entry = self.tables['gps_fixes'].loc[
+                    self.tables['gps_fixes']['veh_id'] == veh_id].iloc[0]
+                s = datetime.strptime(
+                    '{0} {1}'.format(
+                        gps_fixes_entry['UTC_at_date'],
+                        gps_fixes_entry['UTC_at_time']),
+                    '%Y-%m-%d %H:%M:%S')
+                timestamp = time.mktime(s.timetuple())
+            else:
+                gps_fixes_entry = {}
+                gps_fixes_entry['veh_id'] = None
+                gps_fixes_entry['veh_lat'] = None
+                gps_fixes_entry['veh_lon'] = None
+                gps_fixes_entry['veh_speed'] = None
+                timestamp = None
 
             # Given a Trip Update, find and iterate through the stops along
             # that trip, starting with the ith stop in the first Stop Time
@@ -954,7 +977,7 @@ class TableUtility:
                     else:  # it would seem this is stop_sequence specific
                         delay_time = datetime.datetime.fromtimestamp(
                             int(time_diff['time']))
-                        schedule_time = datetimeFromHMS(
+                        schedule_time = self.datetimeFromHMS(
                             trip_id_block.iloc[stop_seq - 1]['departure_time'])
                         delay = delay_time - schedule_time
 
@@ -983,12 +1006,13 @@ class TableUtility:
 
                         new_row['stop_id'] = stop_times_entry['stop_id']
                         new_row['seq'] = stop_seq
-                        new_row['ETA'] = (datetimeFromHMS(
-                                          stop['departure_time']) +
+                        new_row['ETA'] = (self.datetimeFromHMS(
+                                          stop_times_entry['departure_time']) +
                                           delay).strftime('%H:%M:%S')
                         row_collector.append(new_row)
                         stop_seq += 1
+                i += 1
 
-        self.generate_table(table_name, table, transit_eta,
+        self.generate_table(table_name, table, transit_eta_row_func,
                             entities=self.trip_update_feed.entity,
                             row_collector=row_collector)
