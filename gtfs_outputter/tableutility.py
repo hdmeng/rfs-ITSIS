@@ -44,7 +44,7 @@ class TableUtility:
         tables: A dictionary of DataFrames for the generated Task 1 - 3 tables.
         trip2pattern: A dictionary mapping trip_ids to pattern_ids.
         trip2vehicle: A dictionary mapping trip_ids to veh_ids.
-        shape2pattern: A dictionary mapping shape_ids to pattern_ids.
+        pattern2shape: A dictionary mapping pattern_ids to shape_ids.
     """
     SQL_USER = 'root'
     SQL_PWD = 'PATH452RFS'
@@ -61,7 +61,7 @@ class TableUtility:
     tables = {}
     trip2pattern = {}
     trip2vehicle = {}
-    shape2pattern = {}
+    pattern2shape = {}
 
     def __init__(self, agencyID, routeID, static_feed, checksum,
                  trip_update_feed, alert_feed, vehicle_position_feed, is_local,
@@ -321,11 +321,10 @@ class TableUtility:
         else:
             route_rows = self.static_feed['routes']
 
-        missing_shape_id = False
-
         def route_stop_seq_row_func(i, row):
             route_id = row['route_id']
             patterns = []
+            missing_shape_id = False
             new_pattern = False
 
             # Iterate through all the trips that run on a given route and
@@ -380,9 +379,9 @@ class TableUtility:
                         )
                         new_row['version'] = self.checksum
                         row_collector.append(new_row)
+                    self.pattern2shape[pattern_id] = (None if missing_shape_id
+                                                      else subrow['shape_id'])
                 self.trip2pattern[trip_id] = pattern_id
-                # TODO(erchpito) is this really the case?
-                self.shape2pattern[subrow['shape_id']] = pattern_id
 
         self.generate_table(table_name, table,
                             route_stop_seq_row_func, rows=route_rows,
@@ -562,75 +561,66 @@ class TableUtility:
         columns = ['agency_id', 'route_short_name', 'route_dir', 'pattern_id',
                    'shape_id', 'point_id', 'seq', 'length', 'heading', 'dist',
                    'version']
-        table = pd.DataFrame(
-            index=np.r_[0:len(self.static_feed['shapes'].index)],
-            columns=columns)
+        table = pd.DataFrame()
+        row_collector = []
 
         if 'Route_stop_seq' not in self.tables:
             self.route_stop_seq()
         if 'Points' not in self.tables:
             self.points()
 
-        route_stop_seq_entry_memo = {}
-        last_point = None
-        total_dist = 0
+        pattern_id_log = []
 
         def route_point_seq_row_func(i, row):
-            # Since many rows will require the same data from the
-            # route_stop_seq table, this memoizes the entry needed based on the
-            # shape_id
-
-            global last_point
-            global total_dist
-
-            if row['shape_id'] not in route_stop_seq_entry_memo:
-                # TODO(erchpito) make this dictionary
-                pattern_id = self.shape2pattern[row['shape_id']]
-                route_stop_seq_entry_memo[row['shape_id']] = (
-                    self.tables['Route_stop_seq'].loc[
-                        self.tables['Route_stop_seq']['pattern_id'] ==
-                        pattern_id].iloc[0]
-                )
-                last_point = None
-            route_stop_seq_entry = route_stop_seq_entry_memo[row['shape_id']]
-            table.set_value(i, 'agency_id', route_stop_seq_entry['agency_id'])
-            table.set_value(i, 'route_short_name', route_stop_seq_entry[
-                'route_short_name'])
-            table.set_value(i, 'route_dir', route_stop_seq_entry['route_dir'])
-            table.set_value(i, 'pattern_id',
-                            route_stop_seq_entry['pattern_id'])
-            table.set_value(i, 'version', route_stop_seq_entry['version'])
-
-            if self.tables['Points'] is not None:
-                points_entry = (self.tables['Points'].loc[
-                                (self.tables['Points']['point_lat'] ==
-                                 row['shape_pt_lat']) &
-                                (self.tables['Points']['point_lon'] ==
-                                 row['shape_pt_lon'])].iloc[0])
+            if row['pattern_id'] in pattern_id_log:
+                return
             else:
-                points_entry = {'point_id': None}
-            table.set_value(i, 'point_id', points_entry['point_id'])
+                pattern_id_log.append(row['pattern_id'])
 
-            table.set_value(i, 'shape_id', row['shape_id'])
-            table.set_value(i, 'seq', row['shape_pt_sequence'] + 1)
-            if last_point is None:
-                table.set_value(i, 'length', 0)
-                total_dist = 0
-                table.set_value(i, 'heading', 0)
-            else:
-                table.set_value(i, 'length', maputility.get_distance(
-                    last_point[0], last_point[1], row['shape_pt_lat'],
-                    row['shape_pt_lon']))
-                total_dist += table.get_value(i, 'length')
-                table.set_value(i, 'heading', maputility.get_heading(
-                    last_point[0], last_point[1], row['shape_pt_lat'],
-                    row['shape_pt_lon']))
-            table.set_value(i, 'dist', total_dist)
-            last_point = (row['shape_pt_lat'], row['shape_pt_lon'])
+            shape_id = self.pattern2shape[row['pattern_id']]
+            if shape_id is None:
+                return
 
-        self.generate_table(
-            table_name, table, route_point_seq_row_func,
-            rows=self.static_feed['shapes'])
+            shape_id_block = self.static_feed['shapes'].loc[self.static_feed['shapes']['shape_id'] == shape_id]
+
+            last_point = None
+            total_dist = 0
+            for _, subrow in shape_id_block.iterrows():
+                new_row = {}
+                new_row['agency_id'] = row['agency_id']
+                new_row['route_short_name'] = row['route_short_name']
+                new_row['route_dir'] = row['route_dir']
+                new_row['pattern_id'] = row['pattern_id']
+                new_row['shape_id'] = shape_id
+                new_row['version'] = row['version']
+
+                if self.tables['Points'] is not None:
+                    points_entry = (self.tables['Points'].loc[
+                                    (self.tables['Points']['point_lat'] ==
+                                     subrow['shape_pt_lat']) &
+                                    (self.tables['Points']['point_lon'] ==
+                                     subrow['shape_pt_lon'])].iloc[0])
+                else:
+                    points_entry = {'point_id': None}
+                new_row['point_id'] = points_entry['point_id']
+
+                new_row['seq'] = subrow['shape_pt_sequence'] + 1
+
+                if last_point is None:
+                    new_row['length'] = 0
+                    total_dist = 0
+                    new_row['heading'] = 0
+                else:
+                    new_row['length'] = maputility.get_distance(last_point[0], last_point[1], subrow['shape_pt_lat'], subrow['shape_pt_lon'])
+                    total_dist += new_row['length']
+                    new_row['heading'] = maputility.get_heading(last_point[0], last_point[1], subrow['shape_pt_lat'], subrow['shape_pt_lon'])
+                new_row['dist'] = total_dist
+                last_point = (subrow['shape_pt_lat'], subrow['shape_pt_lon'])
+                row_collector.append(new_row)
+
+        self.generate_table(table_name, table, route_point_seq_row_func,
+                            rows=self.tables['Route_stop_seq'],
+                            row_collector=row_collector)
 
     def points(self):
         """Loads the Points table into self.tables (optional).
@@ -661,6 +651,7 @@ class TableUtility:
                 waypoints.append(waypoint)
 
             new_row['agency_id'] = self.agencyID
+            # TODO(erchpito) start at i=0 or i=1?
             new_row['point_id'] = waypoints.index(waypoint)
             new_row['point_lat'] = row['shape_pt_lat']
             new_row['point_lon'] = row['shape_pt_lon']
