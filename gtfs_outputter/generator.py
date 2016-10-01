@@ -1,8 +1,10 @@
 #! /usr/bin/python
 
 import code
+import getpass
 import logging
 import os
+import sqlalchemy as sa
 import sys
 from os import path
 
@@ -18,17 +20,49 @@ GENERATOR_TABLE_ERROR_STRING = 'Please provide a valid task 1 - 3 table name'
 
 def process_feeds(static_feed, checksum, trip_update_feed, alert_feed,
                   vehicle_position_feed, agencyID, routeID, tables, is_local,
-                  should_refresh, agency):
+                  should_refresh, default_login, agency):
+    datapath = {}
     pathname = None
-
+    engine = None
     if is_local:
         pathname = "./agencies/" + agency + "/processed/"
         if not path.exists(pathname):
             os.makedirs(pathname)
+    else:
+        username = 'root'
+        password = '3EasSarcasEgot3'
+        host = 'localhost'
+        database = 'gtfs'
+        # username = 'root'
+        # password = 'PATH452RFS'
+        # host = 'localhost'
+        # database = 'PATHTransit'
+
+        # username = 'root'
+        # password = 'PATH452RFS'
+        # host = 'http://52.53.208.65'
+        # database = 'TrafficTransit'
+
+        if not default_login:
+            username = raw_input('Enter username: ')
+            password = getpass.getpass()
+            host = raw_input('Enter host: ')
+            database = raw_input('Enter database: ')
+
+        engine = sa.create_engine('mysql://{0}:{1}@{2}/{3}'.format(
+            username, password, host, database))
+        try:
+            conn = engine.connect()
+        except:
+            logging.error('invalid credentials for database')
+            sys.exit(1)
+        datapath['conn'] = conn
+    datapath['pathname'] = pathname
+    datapath['engine'] = engine
 
     tableUtility = tableutility.TableUtility(
         agencyID, routeID, static_feed, checksum, trip_update_feed, alert_feed,
-        vehicle_position_feed, is_local, pathname, should_refresh)
+        vehicle_position_feed, datapath, should_refresh)
 
     if 'agency' in tables:
         tableUtility.agency()
@@ -42,10 +76,10 @@ def process_feeds(static_feed, checksum, trip_update_feed, alert_feed,
         tableUtility.run_pattern()
     if 'schedules' in tables:
         tableUtility.schedules()
-    if 'route_point_seq' in tables:
-        tableUtility.route_point_seq()
     if 'points' in tables:
         tableUtility.points()
+    if 'route_point_seq' in tables:
+        tableUtility.route_point_seq()
     # if 'fare' in tables:
     #   tableUtility.fare()
     # if 'calendar_dates' in tables:
@@ -56,6 +90,8 @@ def process_feeds(static_feed, checksum, trip_update_feed, alert_feed,
         tableUtility.gps_fixes()
     if 'transit_eta' in tables:
         tableUtility.transit_eta()
+    if 'conn' in datapath:
+        datapath['conn'].close()
 
 
 def main(argv):
@@ -64,6 +100,7 @@ def main(argv):
 
     refresh = False
     local = False
+    default_login = True
 
     agency = None
     agencyID = None
@@ -92,6 +129,8 @@ def main(argv):
         logging.getLogger().setLevel(logging.INFO)
     if '-l' in argv:
         local = True
+    if '-ml' in argv:
+        default_login = False
     if '-r' in argv:
         refresh = True
     if '-t' in argv:
@@ -121,7 +160,7 @@ def main(argv):
 
     process_feeds(static_feed, checksum, trip_update_feed, alert_feed,
                   vehicle_position_feed, agencyID, routeID, tables, local,
-                  refresh, agency)
+                  refresh, default_login, agency)
 
 if __name__ == '__main__':
     main(sys.argv)

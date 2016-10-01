@@ -13,6 +13,7 @@ import MySQLdb
 import numpy as np
 import pandas as pd
 import pytz
+import sqlalchemy.dialects.mysql as samysql
 
 import dataframeutility
 import gtfsutility
@@ -34,38 +35,20 @@ class TableUtility:
             feed.
         vehicle_position_feed: A FeedMessage instance of the agency's Vehicle
             Position real-time GTFS feed.
-        is_local: A boolean value of whether to save and read from the local
-            directory.
-        pathname: A string representation of the path to read/write to.
         should_refresh: A boolean value of whether to override existing data.
-        SQL_USER: A string of the username for the MySQL database used.
-        SQL_PWD: A string of the password for the MySQL database used.
-        LOGIN: A dictionary of the login items for the MySQL database used.
         tables: A dictionary of DataFrames for the generated Task 1 - 3 tables.
         trip2pattern: A dictionary mapping trip_ids to pattern_ids.
         trip2vehicle: A dictionary mapping trip_ids to veh_ids.
         pattern2shape: A dictionary mapping pattern_ids to shape_ids.
     """
-    SQL_USER = 'root'
-    SQL_PWD = 'PATH452RFS'
-
-    LOGIN = {'host': 'localhost',
-             'user': SQL_USER,
-             'passwd': SQL_PWD,
-             'db': 'PATHTransit'}
-    # LOGIN = {'host': 'http://52.53.208.65',
-    #          'user': SQL_USER,
-    #          'passwd': SQL_PWD,
-    #          'db': 'TrafficTransit'}
-
     tables = {}
     trip2pattern = {}
     trip2vehicle = {}
     pattern2shape = {}
 
     def __init__(self, agencyID, routeID, static_feed, checksum,
-                 trip_update_feed, alert_feed, vehicle_position_feed, is_local,
-                 pathname, should_refresh):
+                 trip_update_feed, alert_feed, vehicle_position_feed, datapath,
+                 should_refresh):
         self.agencyID = agencyID
         self.routeID = routeID
         self.static_feed = static_feed
@@ -73,8 +56,7 @@ class TableUtility:
         self.trip_update_feed = trip_update_feed
         self.alert_feed = alert_feed
         self.vehicle_position_feed = vehicle_position_feed
-        self.is_local = is_local
-        self.pathname = pathname
+        self.datapath = datapath
         # self.should_refresh = should_refresh
         # TODO(erchpito) change this back
         self.should_refresh = True
@@ -110,8 +92,8 @@ class TableUtility:
                                         microsecond=0)
         return n_time + delay
 
-    def generate_table(self, table_name, table, setup_row_func, rows=None,
-                       entities=None, row_collector=None):
+    def generate_table(self, table_name, table, setup_row_func, typing,
+                       refresh, rows=None, entities=None, row_collector=None):
         """Loads the requested table into self.tables.
 
         If possible, the table will be fetched from a database or
@@ -129,12 +111,16 @@ class TableUtility:
             entities: A FeedMessage instance to supply real-time GTFS feed
                 entities for the setup function.
         """
-        if (dataframeutility.can_read_dataframe(
-            table_name, self.LOGIN, self.is_local, self.pathname) and
-                not self.should_refresh):
+        generate = True
+        if (dataframeutility.can_read_dataframe(table_name, self.datapath) and
+                not refresh):
             self.tables[table_name] = dataframeutility.read_dataframe(
-                table_name, self.LOGIN, self.is_local, self.pathname)
-        else:
+                table_name, self.datapath)
+            self.tables[table_name] = self.tables[table_name].loc[
+                (self.tables[table_name]['agency_id'] == self.agencyID)]
+            if not self.tables[table_name].empty:
+                generate = False
+        if generate:
             if row_collector is None:
                 self.tables[table_name] = table
 
@@ -154,28 +140,46 @@ class TableUtility:
             logging.debug('runtime: {0}'.format(stop - start))
 
             dataframeutility.write_dataframe(
-                self.tables[table_name], table_name, self.LOGIN, self.is_local,
-                self.pathname, self.should_refresh)
+                self.tables[table_name], table_name, self.datapath, typing,
+                self.agencyID)
         logging.debug('SUCCESS finished with {0}'.format(table_name))
 
     # MARK: TASK 1
 
-    def agency(self):
+    def agency_definition(self, metadata):
+        return sa.Table(
+            'Agency', metadata,
+            sa.Column('agency_id', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('agency_name', samysql.VARCHAR(255), nullable=False),
+            sa.Column('agency_url', samysql.VARCHAR(255), nullable=False),
+            sa.Column('agency_timezone', samysql.SMALLINT(6), nullable=False, key='agency_timezone'),
+            sa.Column('agency_lang', samysql.VARCHAR(255), nullable=False),
+            sa.Column('agency_phone', samysql.VARCHAR(255), nullable=False),
+            sa.Column('timezone_name', samysql.VARCHAR(45), nullable=False)
+            )
+
+    def agency(self, refresh=True):
         """Loads the Agency table into self.tables
         Setups arguments for self.generate_table to match the description of
         the Agency table as described in Task 1.
         """
         table_name = 'Agency'
-        columns = ['agency_id', 'agency_name', 'agency_url', 'agency_timezone',
-                   'agency_lang', 'agency_phone', 'timezone_name']
+        typing = {'agency_id': samysql.INTEGER(10, unsigned=True),
+                  'agency_name': samysql.VARCHAR(255),
+                  'agency_url': samysql.VARCHAR(255),
+                  'agency_timezone': samysql.SMALLINT(6),
+                  'agency_lang': samysql.VARCHAR(255),
+                  'agency_phone': samysql.VARCHAR(255),
+                  'timezone_name': samysql.VARCHAR(45)
+                  }
         table = pd.DataFrame(
             index=np.r_[0:len(self.static_feed['agency'].index)],
-            columns=columns)
+            columns=typing.keys())
 
         def agency_row_func(i, row):
-            table.set_value(i, 'agency_id', self.agencyID)
-            table.set_value(i, 'agency_name', row['agency_name'])
-            table.set_value(i, 'agency_url', row['agency_url'])
+            table.set_value(i, 'agency_id', int(self.agencyID))
+            table.set_value(i, 'agency_name', str(row['agency_name']))
+            table.set_value(i, 'agency_url', str(row['agency_url']))
             timezone = pytz.timezone(row['agency_timezone'])
             offset = timezone.localize(
                 datetime(2000, 1, 1), is_dst=False).strftime('%z')
@@ -186,19 +190,44 @@ class TableUtility:
                 i, 'agency_phone', self.static_feed['agency'], default='N/A'))
             table.set_value(i, 'timezone_name', row['agency_timezone'])
 
-        self.generate_table(table_name, table, agency_row_func,
-                            rows=self.static_feed['agency'])
+        self.generate_table(table_name, table, agency_row_func, typing,
+                            refresh, rows=self.static_feed['agency'])
 
-    def routes(self):
+    def routes_definition(self, metadata):
+        return sa.Table(
+            'Routes', metadata,
+            sa.Column('agency_id', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('route_short_name', samysql.VARCHAR(255), nullable=False, primary_key=True),
+            sa.Column('route_dir', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('route_type', samysql.INTEGER(10, unsigned=True), nullable=False),
+            sa.Column('route_long_name', samysql.VARCHAR(255), nullable=False, default='N/A'),
+            sa.Column('route_desc', samysql.VARCHAR(255), nullable=False, default='N/A'),
+            sa.Column('route_url', samysql.VARCHAR(255), nullable=False, default='N/A'),
+            sa.Column('route_color', samysql.VARCHAR(255), nullable=False, default='FFFFFF'),
+            sa.Column('route_text_color', samysql.VARCHAR(255), nullable=False, default='000000'),
+            sa.Column('route_id', samysql.VARCHAR(255), nullable=False, default='000000'),
+            sa.Column('version', samysql.VARCHAR(255), nullable=False, primary_key=True)
+            )
+
+    def routes(self, refresh=True):
         """Loads the Routes table into self.tables.
 
         Setups arguments for self.generate_table to match the description of
         the Routes table as described in Task 1.
         """
         table_name = 'Routes'
-        columns = ['agency_id', 'route_short_name', 'route_dir', 'route_type',
-                   'route_long_name', 'route_desc', 'route_url', 'route_color',
-                   'route_text_color', 'route_id', 'version']
+        typing = {'agency_id': samysql.INTEGER(10, unsigned=True),
+                  'route_short_name': samysql.VARCHAR(255),
+                  'route_dir': samysql.INTEGER(10, unsigned=True),
+                  'route_type': samysql.INTEGER(10, unsigned=True),
+                  'route_long_name': samysql.VARCHAR(255),
+                  'route_desc': samysql.VARCHAR(255),
+                  'route_url': samysql.VARCHAR(255),
+                  'route_color': samysql.VARCHAR(255),
+                  'route_text_color': samysql.VARCHAR(255),
+                  'route_id': samysql.VARCHAR(255),
+                  'version': samysql.VARCHAR(255)
+                  }
         table = None
         row_collector = []
 
@@ -212,12 +241,12 @@ class TableUtility:
                 self.static_feed['trips']['route_id'] ==
                     row['route_id']]['direction_id'].unique():
                 new_row = {}
-                new_row['agency_id'] = self.agencyID
+                new_row['agency_id'] = int(self.agencyID)
                 new_row['route_short_name'] = dataframeutility.optional_field(
                     i, 'route_short_name', self.static_feed['routes'],
                     default=self.static_feed['routes'].iloc[i]
                     ['route_long_name'])
-                new_row['route_dir'] = direction_id
+                new_row['route_dir'] = int(direction_id)
                 new_row['route_type'] = int(row['route_type'])
                 new_row['route_long_name'] = dataframeutility.optional_field(
                     i, 'route_long_name', self.static_feed['routes'],
@@ -236,28 +265,53 @@ class TableUtility:
                 new_row['version'] = self.checksum
                 row_collector.append(new_row)
 
-        self.generate_table(table_name, table, routes_row_func,
-                            rows=self.static_feed['routes'],
+        self.generate_table(table_name, table, routes_row_func, typing,
+                            refresh, rows=self.static_feed['routes'],
                             row_collector=row_collector)
 
-    def stops(self):
+    def stops_definition(self, metadata):
+        return sa.Table(
+            'Stops', metadata,
+            sa.Column('agency_id', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('stop_id', samysql.VARCHAR(255), nullable=False, primary_key=True),
+            sa.Column('stop_code', samysql.VARCHAR(255), nullable=False, default='N/A'),
+            sa.Column('stop_name', samysql.VARCHAR(255), nullable=False),
+            sa.Column('stop_desc', samysql.VARCHAR(255), nullable=False, default='N/A'),
+            sa.Column('stop_lat', samysql.DOUBLE(), nullable=False),
+            sa.Column('stop_lon', samysql.DOUBLE(), nullable=False),
+            sa.Column('stop_url', samysql.VARCHAR(255), nullable=False, default='N/A'),
+            sa.Column('location_type', samysql.INTEGER(10, unsigned=True), nullable=False, default=0),
+            sa.Column('parent_station', samysql.BIGINT(20), nullable=False, default=0),
+            sa.Column('wheelchair_boarding', samysql.INTEGER(10, unsigned=True), nullable=False, default=0),
+            sa.Column('version', samysql.VARCHAR(255), nullable=False, primary_key=True)
+            )
+
+    def stops(self, refresh=True):
         """Loads the Stops table into self.tables.
 
         Setups arguments for self.generate_table to match the description of
         the Stops table as described in Task 1.
         """
         table_name = 'Stops'
-        columns = ['agency_id', 'stop_id', 'stop_code', 'stop_name',
-                   'stop_desc', 'stop_lat', 'stop_lon', 'lat_lon', 'stop_url',
-                   'location_type', 'parent_station', 'wheelchair_boarding',
-                   'version']
+        typing = {'agency_id': samysql.INTEGER(10, unsigned=True),
+                  'stop_id': samysql.VARCHAR(255),
+                  'stop_code': samysql.VARCHAR(255),
+                  'stop_name': samysql.VARCHAR(255),
+                  'stop_desc': samysql.VARCHAR(255),
+                  'stop_lat': samysql.DOUBLE(),
+                  'stop_lon': samysql.DOUBLE(),
+                  'stop_url': samysql.VARCHAR(255),
+                  'location_type': samysql.INTEGER(10, unsigned=True),
+                  'parent_station': samysql.BIGINT(20),
+                  'wheelchair_boarding': samysql.INTEGER(10, unsigned=True),
+                  'version': samysql.VARCHAR(255)
+                  }
         table = pd.DataFrame(
             index=np.r_[0:len(self.static_feed['stops'].index)],
-            columns=columns)
+            columns=typing.keys())
 
         def stops_row_func(i, row):
-            table.set_value(i, 'agency_id', self.agencyID)
-            # TODO(erchpito) stop_id is suppose to be an int, hash strings?
+            table.set_value(i, 'agency_id', int(self.agencyID))
             table.set_value(i, 'stop_id', str(row['stop_id']))
             table.set_value(i, 'stop_code', dataframeutility.optional_field(
                 i, 'stop_code', self.static_feed['stops'], default='N/A'))
@@ -266,7 +320,6 @@ class TableUtility:
                 i, 'stop_desc', self.static_feed['stops'], default='N/A'))
             table.set_value(i, 'stop_lat', float(row['stop_lat']))
             table.set_value(i, 'stop_lon', float(row['stop_lon']))
-            table.set_value(i, 'lat_lon', 0)  # ignore until using MySQL
             table.set_value(i, 'stop_url', dataframeutility.optional_field(
                 i, 'stop_url', self.static_feed['stops'], default='N/A'))
             table.set_value(
@@ -283,32 +336,78 @@ class TableUtility:
                     cast=int, default=0))
             table.set_value(i, 'version', self.checksum)
 
-        self.generate_table(table_name, table, stops_row_func,
-                            rows=self.static_feed['stops'])
+        self.generate_table(table_name, table, stops_row_func, typing,
+                            refresh, rows=self.static_feed['stops'])
 
-    # TODO(erchpito) the 511 dataset does not include shape_id in trips
-    # thus there's no way to link shapes to patterns
-    # RESPONSE: make a warning whenever shape_id is not
-    # there use null. Don't generate tables that need such
-    # TODO(erchpito) if you want an additional speed increase
-    # consider using trips to supply the rows, and sort trips and stop_times
-    # by order of trip_id.
-    # feed['trips'].sort_values('trip_id').reset_index(drop=True)
-    # (feed['stop_times'].sort_values(
-    #  ['trip_id', 'stop_sequence']).reset_index(drop=True))
-    # going through the entries will be linear, with the only jumping happening
-    # in the comparatively small routes table. This however cannot be done
-    # as an indepedent task and get parallelized. This would also be quite slow
-    # for looking at one route, since it must iterate through all stops still
-    def route_stop_seq(self):
+    def trip_pattern_shape_definition(self, metadata):
+        return sa.Table(
+            'Trip_pattern_shape', metadata,
+            sa.Column('agency_id', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('trip_id', samysql.VARCHAR(255), nullable=False, primary_key=True),
+            sa.Column('pattern_id', samysql.VARCHAR(255), nullable=False, primary_key=True),
+            sa.Column('shape_id', samysql.VARCHAR(255), default='N/A'),
+            )
+
+    def trip_pattern_shape(self, refresh=True):
+        """WIP
+
+        WIP
+        """
+        table_name = 'Trip_pattern_shape'
+        typing = {'agency_id': samysql.INTEGER(10, unsigned=True),
+                  'trip_id': samysql.VARCHAR(255),
+                  'pattern_id': samysql.VARCHAR(255),
+                  'shape_id': samysql.VARCHAR(255)
+                  }
+        table = None
+        row_collector = []
+
+        def trip_pattern_shape_row_func(entity):
+            new_row = {}
+            new_row['agency_id'] = self.agencyID
+            new_row['trip_id'] = entity[0]
+            new_row['pattern_id'] = entity[1]
+            new_row['shape_id'] = self.pattern2shape[entity[1]]
+            row_collector.append(new_row)
+
+        self.generate_table(table_name, table, trip_pattern_shape_row_func, typing,
+                            refresh, entities=self.trip2pattern.items(),
+                            row_collector=row_collector)
+
+        if not self.trip2pattern:
+            self.trip2pattern = self.tables[table_name].set_index('trip_id')['pattern_id'].to_dict()
+        if not self.pattern2shape:
+            self.pattern2shape = self.tables[table_name].set_index('pattern_id')['shape_id'].to_dict()
+
+    def route_stop_seq_definition(self, metadata):
+        return sa.Table(
+            'Route_stop_seq', metadata,
+            sa.Column('agency_id', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('route_short_name', samysql.VARCHAR(255), nullable=False, primary_key=True),
+            sa.Column('route_dir', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('pattern_id', samysql.VARCHAR(255), nullable=False, primary_key=True),
+            sa.Column('stop_id', samysql.VARCHAR(255), nullable=False),
+            sa.Column('seq', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('is_time_point', samysql.INTEGER(10, unsigned=True), nullable=False, default=0),
+            sa.Column('version', samysql.VARCHAR(255), nullable=False, primary_key=True)
+            )
+
+    def route_stop_seq(self, refresh=True):
         """Loads the Route_stop_seq table into self.tables.
 
         Setups arguments for self.generate_table to match the description of
         the Route_stop_seq table as described in Task 1.
         """
         table_name = 'Route_stop_seq'
-        columns = ['agency_id', 'route_short_name', 'route_dir', 'pattern_id',
-                   'stop_id', 'seq', 'is_time_point', 'version']
+        typing = {'agency_id': samysql.INTEGER(10, unsigned=True),
+                  'route_short_name': samysql.VARCHAR(255),
+                  'route_dir': samysql.INTEGER(10, unsigned=True),
+                  'pattern_id': samysql.VARCHAR(255),
+                  'stop_id': samysql.VARCHAR(255),
+                  'seq': samysql.INTEGER(10, unsigned=True),
+                  'is_time_point': samysql.INTEGER(10, unsigned=True),
+                  'version': samysql.VARCHAR(255)
+                  }
         table = None
         row_collector = []
 
@@ -366,12 +465,12 @@ class TableUtility:
                 if new_pattern:
                     for k, subsubrow in trip_id_block.iterrows():
                         new_row = {}
-                        new_row['agency_id'] = self.agencyID
-                        new_row['route_short_name'] = route_short_name
-                        new_row['route_dir'] = direction_id
-                        new_row['pattern_id'] = pattern_id
+                        new_row['agency_id'] = int(self.agencyID)
+                        new_row['route_short_name'] = str(route_short_name)
+                        new_row['route_dir'] = int(direction_id)
+                        new_row['pattern_id'] = str(pattern_id)
                         new_row['stop_id'] = str(subsubrow['stop_id'])
-                        new_row['seq'] = subsubrow['stop_sequence']
+                        new_row['seq'] = int(subsubrow['stop_sequence'])
                         new_row['is_time_point'] = (
                             dataframeutility.optional_field(
                                 k, 'timepoint', self.static_feed['stop_times'],
@@ -381,39 +480,57 @@ class TableUtility:
                         row_collector.append(new_row)
                     self.pattern2shape[pattern_id] = (None if missing_shape_id
                                                       else subrow['shape_id'])
-                self.trip2pattern[trip_id] = pattern_id
+                self.trip2pattern[str(trip_id)] = pattern_id
 
-        self.generate_table(table_name, table,
-                            route_stop_seq_row_func, rows=route_rows,
+        self.generate_table(table_name, table, route_stop_seq_row_func, typing,
+                            refresh, rows=route_rows,
                             row_collector=row_collector)
 
-        # TODO(erchpito) figure out how to do this if it were on the database
-        if not self.trip2pattern:
-            with open(self.pathname + 'Trip2Pattern.csv', 'rb') as f:
-                reader = csv.reader(f)
-                trip2pattern = dict(reader)
-        else:
-            with open(self.pathname + 'Trip2Pattern.csv', 'wb') as f:
-                writer = csv.writer(f)
-                for key, value in self.trip2pattern.items():
-                    writer.writerow([key, value])
+        self.trip_pattern_shape(refresh=refresh)
 
-    def run_pattern(self):
+    def run_pattern_definition(self, metadata):
+        return sa.Table(
+            'RunPattern', metadata,
+            sa.Column('agency_id', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('route_short_name', samysql.VARCHAR(255), nullable=False, primary_key=True),
+            sa.Column('start_date', samysql.DATE(), nullable=False, primary_key=True),
+            sa.Column('end_date', samysql.DATE(), nullable=False),
+            sa.Column('service_id', samysql.VARCHAR(255), nullable=False),
+            sa.Column('day', samysql.CHAR(7), nullable=False, primary_key=True),
+            sa.Column('route_dir', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('run', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('pattern_id', samysql.VARCHAR(255), nullable=False),
+            sa.Column('trip_headsign', samysql.VARCHAR(255), nullable=False),
+            sa.Column('trip_id', samysql.VARCHAR(255), nullable=False),
+            sa.Column('version', samysql.VARCHAR(255), nullable=False, primary_key=True)
+            )
+
+    def run_pattern(self, refresh=True):
         """Loads the RunPattern table into self.tables.
 
         Setups arguments for self.generate_table to match the description of
         the RunPattern table as described in Task 1.
         """
         table_name = 'RunPattern'
-        columns = ['agency_id', 'route_short_name', 'start_date', 'end_date',
-                   'service_id', 'day', 'route_dir', 'run', 'pattern_id',
-                   'trip_headsign', 'trip_id', 'version']
+        typing = {'agency_id': samysql.INTEGER(10, unsigned=True),
+                  'route_short_name': samysql.VARCHAR(255),
+                  'start_date': samysql.DATE(),
+                  'end_date': samysql.DATE(),
+                  'service_id': samysql.VARCHAR(255),
+                  'day': samysql.CHAR(7),
+                  'route_dir': samysql.INTEGER(10, unsigned=True),
+                  'run': samysql.INTEGER(10, unsigned=True),
+                  'pattern_id': samysql.VARCHAR(255),
+                  'trip_headsign': samysql.VARCHAR(255),
+                  'trip_id': samysql.VARCHAR(255),
+                  'version': samysql.VARCHAR(255)
+                  }
         table = pd.DataFrame(
             index=np.r_[0:len(self.static_feed['trips'].index)],
-            columns=columns)
+            columns=typing.keys())
 
         if 'Route_stop_seq' not in self.tables:
-            self.route_stop_seq()
+            self.route_stop_seq(refresh=False)
 
         # If a routeID has been given, fetch the rows in the routes table
         # pertaining to that route. Otherwise, use the whole routes table.
@@ -427,7 +544,7 @@ class TableUtility:
         run_count = {}
 
         def runPattern_row_func(i, row):
-            table.set_value(i, 'agency_id', self.agencyID)
+            table.set_value(i, 'agency_id', int(self.agencyID))
             # the index of the row containing the route
             j = np.where(self.static_feed['routes']['route_id'] ==
                          row['route_id'])[0][0]
@@ -437,7 +554,7 @@ class TableUtility:
                                 self.static_feed['routes'],
                                 default=(self.static_feed['routes'].iloc[j]
                                          ['route_long_name'])))
-            table.set_value(i, 'service_id', row['service_id'])
+            table.set_value(i, 'service_id', str(row['service_id']))
             calendar = self.static_feed['calendar'].loc[self.static_feed[
                 'calendar']['service_id'] == row['service_id']].iloc[0]
             table.set_value(i, 'start_date', datetime.strptime(
@@ -463,7 +580,7 @@ class TableUtility:
             table.set_value(i, 'run', run_count[run_key])
             run_count[run_key] += 1
 
-            table.set_value(i, 'pattern_id', self.trip2pattern[row['trip_id']])
+            table.set_value(i, 'pattern_id', str(self.trip2pattern[str(row['trip_id'])]))  # this will not work since you need to distinguish with agency_id
             table.set_value(i, 'trip_headsign',
                             dataframeutility.optional_field(
                                 i, 'trip_headsign', self.static_feed['trips'],
@@ -474,30 +591,68 @@ class TableUtility:
             table.set_value(i, 'trip_id', str(row['trip_id']))
             table.set_value(i, 'version', self.checksum)
 
-        self.generate_table(table_name, table,
-                            runPattern_row_func, rows=trip_rows)
+        self.generate_table(table_name, table, runPattern_row_func, typing,
+                            refresh, rows=trip_rows)
 
-    def schedules(self):
+    def schedules_definition(self, metadata):
+        return sa.Table(
+            'Schedules', metadata,
+            sa.Column('agency_id', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('route_short_name', samysql.VARCHAR(255), nullable=False, primary_key=True, key='route_short_name'),
+            sa.Column('start_date', samysql.DATE(), nullable=False, primary_key=True, key='start_date'),
+            sa.Column('end_date', samysql.DATE(), nullable=False),
+            sa.Column('day', samysql.CHAR(7), nullable=False, primary_key=True, key='day'),
+            sa.Column('route_dir', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('run', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True, key='run'),
+            sa.Column('pattern_id', samysql.VARCHAR(255), nullable=False),
+            sa.Column('seq', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('stop_id', samysql.VARCHAR(255), nullable=False, key='stop_id'),
+            sa.Column('is_time_point', samysql.INTEGER(10, unsigned=True), nullable=False, default=0),
+            sa.Column('pickup_type', samysql.INTEGER(10, unsigned=True), nullable=False),
+            sa.Column('dropoff_type', samysql.INTEGER(10, unsigned=True), nullable=False),
+            sa.Column('arrival_time', samysql.VARCHAR(10), nullable=False),
+            sa.Column('departure_time', samysql.VARCHAR(10), nullable=False),
+            sa.Column('stop_headsign', samysql.VARCHAR(255), nullable=False),
+            sa.Column('trip_id', samysql.VARCHAR(255), nullable=False),
+            sa.Column('version', samysql.VARCHAR(255), nullable=False, primary_key=True)
+            )
+
+    def schedules(self, refresh=True):
         """Loads the Schedules table into self.tables.
 
         Setups arguments for self.generate_table to match the description of
         the Schedules table as described in Task 1.
         """
         table_name = 'Schedules'
-        columns = ['agency_id', 'route_short_name', 'start_date', 'end_date',
-                   'day', 'route_dir', 'run', 'pattern_id', 'seq', 'stop_id',
-                   'is_time_point', 'pickup_type', 'dropoff_type',
-                   'arrival_time', 'departure_time', 'stop_headsign',
-                   'trip_id', 'version']
+        typing = {'agency_id': samysql.INTEGER(10, unsigned=True),
+                  'route_short_name': samysql.VARCHAR(255),
+                  'start_date': samysql.DATE(),
+                  'end_date': samysql.DATE(),
+                  'day': samysql.CHAR(7),
+                  'route_dir': samysql.INTEGER(10, unsigned=True),
+                  'run': samysql.INTEGER(10, unsigned=True),
+                  'pattern_id': samysql.VARCHAR(255),
+                  'seq': samysql.INTEGER(10, unsigned=True),
+                  'stop_id': samysql.VARCHAR(255),
+                  'is_time_point': samysql.INTEGER(10, unsigned=True),
+                  'pickup_type': samysql.INTEGER(10, unsigned=True),
+                  'dropoff_type': samysql.INTEGER(10, unsigned=True),
+                  'arrival_time': samysql.VARCHAR(10),
+                  'departure_time': samysql.VARCHAR(10),
+                  'stop_headsign': samysql.VARCHAR(255),
+                  'trip_id': samysql.VARCHAR(255),
+                  'version': samysql.VARCHAR(255)
+                  }
         table = pd.DataFrame(
             index=np.r_[0:len(self.static_feed['stop_times'].index)],
-            columns=columns)
+            columns=typing.keys())
 
         if 'Route_stop_seq' not in self.tables:
-            self.route_stop_seq()
+            self.route_stop_seq(refresh=False)
         if 'RunPattern' not in self.tables:
-            self.run_pattern()
+            self.run_pattern(refresh=False)
 
+        trip_pattern_stop_count = {}
         runPattern_entry_memo = {}
 
         def schedules_row_func(i, row):
@@ -507,46 +662,68 @@ class TableUtility:
             if row['trip_id'] not in runPattern_entry_memo:
                 runPattern_entry_memo[row['trip_id']] = (
                     self.tables['RunPattern'].loc[
-                        self.tables['RunPattern']['trip_id'] ==
-                        row['trip_id']].iloc[0]
+                        (self.tables['RunPattern']['trip_id'] ==
+                         str(row['trip_id']))].iloc[0]
                 )
             runPattern_entry = runPattern_entry_memo[row['trip_id']]
-            table.set_value(i, 'agency_id', runPattern_entry['agency_id'])
+            table.set_value(i, 'agency_id', int(runPattern_entry['agency_id']))
             table.set_value(i, 'route_short_name',
-                            runPattern_entry['route_short_name'])
+                            str(runPattern_entry['route_short_name']))
             table.set_value(i, 'start_date', runPattern_entry['start_date'])
             table.set_value(i, 'end_date', runPattern_entry['end_date'])
-            table.set_value(i, 'day', runPattern_entry['day'])
-            table.set_value(i, 'route_dir', runPattern_entry['route_dir'])
-            table.set_value(i, 'run', runPattern_entry['run'])
-            table.set_value(i, 'pattern_id', runPattern_entry['pattern_id'])
-            table.set_value(i, 'trip_id', runPattern_entry['trip_id'])
+            table.set_value(i, 'day', str(runPattern_entry['day']))
+            table.set_value(i, 'route_dir', int(runPattern_entry['route_dir']))
+            table.set_value(i, 'run', int(runPattern_entry['run']))
+            table.set_value(i, 'pattern_id', str(runPattern_entry['pattern_id']))
+            table.set_value(i, 'trip_id', str(runPattern_entry['trip_id']))
             table.set_value(i, 'version', runPattern_entry['version'])
 
+            trip_pattern_stop = (str(runPattern_entry['trip_id']), 'pattern_id', str(runPattern_entry['pattern_id']), str(row['stop_id']))
+            if trip_pattern_stop not in trip_pattern_stop_count:
+                trip_pattern_stop_count[trip_pattern_stop] = 0
+            else:
+                trip_pattern_stop_count[trip_pattern_stop] += 1
+            index = trip_pattern_stop_count[trip_pattern_stop]
             route_stop_seq_entry = (self.tables['Route_stop_seq'].loc[
                                    (self.tables['Route_stop_seq']['stop_id'] ==
-                                    row['stop_id']) & (self.tables['Route_stop_seq']['pattern_id'] == runPattern_entry['pattern_id'])].iloc[0])
-            table.set_value(i, 'seq', route_stop_seq_entry['seq'])
-            table.set_value(i, 'stop_id', route_stop_seq_entry['stop_id'])
+                                    str(row['stop_id'])) & (self.tables['Route_stop_seq']['pattern_id'] == runPattern_entry['pattern_id'])].iloc[index])
+            table.set_value(i, 'seq', int(route_stop_seq_entry['seq']))
+            table.set_value(i, 'stop_id', str(route_stop_seq_entry['stop_id']))
             table.set_value(i, 'is_time_point',
-                            route_stop_seq_entry['is_time_point'])
+                            int(route_stop_seq_entry['is_time_point']))
             table.set_value(i, 'pickup_type', dataframeutility.optional_field(
                 i, 'pickup_type', self.static_feed['stop_times'], cast=int,
                 default=0))
             table.set_value(i, 'dropoff_type', dataframeutility.optional_field(
                 i, 'drop_off_type', self.static_feed['stop_times'], cast=int,
                 default=0))
-            table.set_value(i, 'arrival_time', row['arrival_time'])
-            table.set_value(i, 'departure_time', row['departure_time'])
+            table.set_value(i, 'arrival_time', str(row['arrival_time']))
+            table.set_value(i, 'departure_time', str(row['departure_time']))
             table.set_value(i, 'stop_headsign',
                             dataframeutility.optional_field(
                                 i, 'stop_headsign',
-                                self.static_feed['stop_times']))
+                                self.static_feed['stop_times'], default='N/A'))
 
-        self.generate_table(table_name, table, schedules_row_func,
-                            rows=self.static_feed['stop_times'])
+        self.generate_table(table_name, table, schedules_row_func, typing,
+                            refresh, rows=self.static_feed['stop_times'])
 
-    def route_point_seq(self):
+    def route_point_seq_definition(self, metadata):
+        return sa.Table(
+            'Route_point_seq', metadata,
+            sa.Column('agency_id', samysql.INTEGER(10, unsigned=True), nullable=False),
+            sa.Column('route_short_name', samysql.VARCHAR(255), nullable=False),
+            sa.Column('route_dir', samysql.INTEGER(10, unsigned=True), nullable=False),
+            sa.Column('pattern_id', samysql.VARCHAR(255), nullable=False),
+            sa.Column('shape_id', samysql.VARCHAR(255), nullable=False),
+            sa.Column('point_id', samysql.INTEGER(10, unsigned=True), nullable=False),
+            sa.Column('seq', samysql.INTEGER(10, unsigned=True), nullable=False),
+            sa.Column('length', samysql.DOUBLE(), nullable=False),
+            sa.Column('heading', samysql.DOUBLE(), nullable=False),
+            sa.Column('dist', samysql.DOUBLE(), nullable=False),
+            sa.Column('version', samysql.VARCHAR(255), nullable=False)
+            )
+
+    def route_point_seq(self, refresh=True):
         """Loads the Route_point_seq table into self.tables (optional).
 
         Setups arguments for self.generate_table to match the description of
@@ -554,20 +731,29 @@ class TableUtility:
         """
         table_name = 'Route_point_seq'
         if 'shapes' not in self.static_feed:
-            logging.warning(('FAILURE could not compute {0} without the'
+            logging.warning(('FAILURE could not compute {0} without the '
                              '\'{1}\' table').format(table_name, 'shapes'))
             self.tables[table_name] = None
             return
-        columns = ['agency_id', 'route_short_name', 'route_dir', 'pattern_id',
-                   'shape_id', 'point_id', 'seq', 'length', 'heading', 'dist',
-                   'version']
+        typing = {'agency_id': samysql.INTEGER(10, unsigned=True),
+                  'route_short_name': samysql.VARCHAR(255),
+                  'route_dir': samysql.INTEGER(10, unsigned=True),
+                  'pattern_id': samysql.VARCHAR(255),
+                  'shape_id': samysql.VARCHAR(255),
+                  'point_id': samysql.INTEGER(10, unsigned=True),
+                  'seq': samysql.INTEGER(10, unsigned=True),
+                  'length': samysql.DOUBLE(),
+                  'heading': samysql.DOUBLE(),
+                  'dist': samysql.DOUBLE(),
+                  'version': samysql.VARCHAR(255)
+                  }
         table = pd.DataFrame()
         row_collector = []
 
         if 'Route_stop_seq' not in self.tables:
-            self.route_stop_seq()
+            self.route_stop_seq(refresh=False)
         if 'Points' not in self.tables:
-            self.points()
+            self.points(refresh=False)
 
         pattern_id_log = []
 
@@ -587,11 +773,11 @@ class TableUtility:
             total_dist = 0
             for _, subrow in shape_id_block.iterrows():
                 new_row = {}
-                new_row['agency_id'] = row['agency_id']
-                new_row['route_short_name'] = row['route_short_name']
-                new_row['route_dir'] = row['route_dir']
-                new_row['pattern_id'] = row['pattern_id']
-                new_row['shape_id'] = shape_id
+                new_row['agency_id'] = int(row['agency_id'])
+                new_row['route_short_name'] = str(row['route_short_name'])
+                new_row['route_dir'] = int(row['route_dir'])
+                new_row['pattern_id'] = str(row['pattern_id'])
+                new_row['shape_id'] = str(shape_id)
                 new_row['version'] = row['version']
 
                 if self.tables['Points'] is not None:
@@ -602,7 +788,7 @@ class TableUtility:
                                      subrow['shape_pt_lon'])].iloc[0])
                 else:
                     points_entry = {'point_id': None}
-                new_row['point_id'] = points_entry['point_id']
+                new_row['point_id'] = int(points_entry['point_id'])
 
                 new_row['seq'] = subrow['shape_pt_sequence'] + 1
 
@@ -619,10 +805,21 @@ class TableUtility:
                 row_collector.append(new_row)
 
         self.generate_table(table_name, table, route_point_seq_row_func,
+                            typing, refresh,
                             rows=self.tables['Route_stop_seq'],
                             row_collector=row_collector)
 
-    def points(self):
+    def points_definition(self, metadata):
+        return sa.Table(
+            'Points', metadata,
+            sa.Column('agency_id', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('point_id', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('point_lat', samysql.DOUBLE(), nullable=False),
+            sa.Column('point_lon', samysql.DOUBLE(), nullable=False),
+            sa.Column('version', samysql.VARCHAR(255), nullable=False, primary_key=True)
+            )
+
+    def points(self, refresh=True):
         """Loads the Points table into self.tables (optional).
 
         Setups arguments for self.generate_table to match the description of
@@ -634,8 +831,12 @@ class TableUtility:
                              '\'{1}\' table').format(table_name, 'shapes'))
             self.tables[table_name] = None
             return
-        columns = ['agency_id', 'point_id', 'point_lat', 'point_lon',
-                   'lat_lon', 'version']
+        typing = {'agency_id': samysql.INTEGER(10, unsigned=True),
+                  'point_id': samysql.INTEGER(10, unsigned=True),
+                  'point_lat': samysql.DOUBLE(),
+                  'point_lon': samysql.DOUBLE(),
+                  'version': samysql.VARCHAR(255)
+                  }
         table = None
         row_collector = []
 
@@ -650,21 +851,36 @@ class TableUtility:
             else:
                 waypoints.append(waypoint)
 
-            new_row['agency_id'] = self.agencyID
-            # TODO(erchpito) start at i=0 or i=1?
-            new_row['point_id'] = waypoints.index(waypoint)
-            new_row['point_lat'] = row['shape_pt_lat']
-            new_row['point_lon'] = row['shape_pt_lon']
-            # TODO(erchpito) figure out lat_lon calculation
-            new_row['lat_lon'] = None
+            new_row['agency_id'] = int(self.agencyID)
+            new_row['point_id'] = int(waypoints.index(waypoint))
+            new_row['point_lat'] = float(row['shape_pt_lat'])
+            new_row['point_lon'] = float(row['shape_pt_lon'])
             new_row['version'] = self.checksum
             row_collector.append(new_row)
 
-        self.generate_table(table_name, table, points_row_func,
-                            rows=self.static_feed['shapes'],
+        self.generate_table(table_name, table, points_row_func, typing,
+                            refresh, rows=self.static_feed['shapes'],
                             row_collector=row_collector)
 
-    def fare(self):
+    def fare_definition(self, metadata):
+        return sa.Table(
+            'Fare', metadata,
+            sa.Column('agency_id', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('route_short_name', samysql.VARCHAR(255), nullable=False, primary_key=True),
+            sa.Column('route_dir', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('pattern_id', samysql.VARCHAR(255), nullable=False, primary_key=True),
+            sa.Column('price', samysql.DOUBLE(), nullable=False),
+            sa.Column('currency_type', samysql.VARCHAR(255), nullable=False),
+            sa.Column('payment_method', samysql.INTEGER(10, unsigned=True), nullable=False),
+            sa.Column('origin_id', samysql.INTEGER(11), nullable=False, default=-1, primary_key=True),
+            sa.Column('destination_id', samysql.INTEGER(11), nullable=False, default=-1, primary_key=True),
+            sa.Column('transfers', samysql.INTEGER(11), nullable=False, default=-1),
+            sa.Column('transfer_duration', samysql.INTEGER(10, unsigned=True), nullable=False, default=0),
+            sa.Column('fare_id', samysql.VARCHAR(45), nullable=False, default='Regular', primary_key=True),
+            sa.Column('version', samysql.VARCHAR(255), nullable=False, primary_key=True)
+            )
+
+    def fare(self, refresh=True):
         """Loads the Fare table into self.tables (optional).
 
         Setups arguments for self.generate_table to match the description of
@@ -673,7 +889,7 @@ class TableUtility:
         table_name = 'Fare'
         if 'fare_rules' not in self.static_feed:
             logging.warning(
-                ('FAILURE could not compute {0} without the'
+                ('FAILURE could not compute {0} without the '
                     '\'{1}\' table').format(table_name, 'fare_rules'))
             self.tables[table_name] = None
             return
@@ -683,19 +899,43 @@ class TableUtility:
                     '\'{1}\' table').format(table_name, 'fare_attributes'))
             self.tables[table_name] = None
             return
-        columns = ['agency_id', 'route_short_name', 'route_dir', 'pattern_id',
-                   'price', 'currency_type', 'payment_method', 'origin_id',
-                   'destination_id', 'transfers', 'transfer_duration',
-                   'fare_id', 'version']
+        typing = {'agency_id': samysql.INTEGER(10, unsigned=True),
+                  'route_short_name': samysql.VARCHAR(255),
+                  'route_dir': samysql.INTEGER(10, unsigned=True),
+                  'pattern_id': samysql.VARCHAR(255),
+                  'price': samysql.DOUBLE(),
+                  'currency_type': samysql.VARCHAR(255),
+                  'payment_method': samysql.INTEGER(10, unsigned=True),
+                  'origin_id': samysql.INTEGER(11),
+                  'destination_id': samysql.INTEGER(11),
+                  'transfers': samysql.INTEGER(11),
+                  'transfer_duration': samysql.INTEGER(10, unsigned=True),
+                  'fare_id': samysql.VARCHAR(45),
+                  'version': samysql.VARCHAR(255)
+                  }
         table = pd.DataFrame()
 
         def fare_row_func(i, row):
             pass
 
-        # self.generate_table(table_name, table, fare_row_func,
-        #                     rows=self.static_feed['fare_rules'])
+        # self.generate_table(table_name, table, fare_row_func, typing,
+        #                     refresh, rows=self.static_feed['fare_rules'])
 
-    def calendar_dates(self):
+    def calendar_dates_definition(self, metadata):
+        return sa.Table(
+            'Calendar_dates', metadata,
+            sa.Column('agency_id', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('route_short_name', samysql.VARCHAR(255), nullable=False, primary_key=True),
+            sa.Column('special_date', samysql.DATE(), nullable=False, primary_key=True, key='special_date'),
+            sa.Column('route_dir', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('run', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('exception', samysql.INTEGER(10, unsigned=True), nullable=False),
+            sa.Column('day', samysql.CHAR(7), nullable=False, primary_key=True),
+            sa.Column('service_id', samysql.VARCHAR(255), nullable=False),
+            sa.Column('version', samysql.VARCHAR(255), nullable=False, primary_key=True)
+            )
+
+    def calendar_dates(self, refresh=True):
         """Loads the Calendar_dates table into self.tables (optional).
 
         Setups arguments for self.generate_table to match the description of
@@ -704,40 +944,65 @@ class TableUtility:
         table_name = 'Calendar_dates'
         if 'calendar_dates' not in self.static_feed:
             logging.warning(
-                ('FAILURE could not compute {0} without the'
+                ('FAILURE could not compute {0} without the '
                     '\'{1}\' table').format(table_name, 'calendar_dates'))
             self.tables[table_name] = None
             return
-        columns = ['agency_id', 'route_short_name', 'special_date',
-                   'route_dir', 'run', 'exception_type', 'day', 'service_id',
-                   'version']
+        typing = {'agency_id': samysql.INTEGER(10, unsigned=True),
+                  'route_short_name': samysql.VARCHAR(255),
+                  'special_date': samysql.DATE(),
+                  'route_dir': samysql.INTEGER(10, unsigned=True),
+                  'run': samysql.INTEGER(10, unsigned=True),
+                  'exception': samysql.INTEGER(10, unsigned=True),
+                  'day': samysql.CHAR(7),
+                  'service_id': samysql.VARCHAR(255),
+                  'version': samysql.VARCHAR(255)
+                  }
         table = pd.DataFrame()
 
         def calendar_dates_row_func(i, row, lock=None):
             pass
 
-        # self.generate_table(table_name, table, calendar_dates_row_func,
-        #                     rows=self.static_feed['calendar_dates'])
+        # self.generate_table(table_name, table, calendar_dates_row_func, typing,
+        #                     refresh, rows=self.static_feed['calendar_dates'])
 
     # MARK: TASK 2
+
+    def transfers_definition(self, metadata):
+        return sa.Table(
+            'Transfers', metadata,
+            sa.Column('from_agency_id', samysql.INTEGER(11), nullable=False, default=-1, primary_key=True),
+            sa.Column('from_id', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('to_agency_id', samysql.INTEGER(11), nullable=False, default=-1, primary_key=True),
+            sa.Column('to_id', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('transfer_type', samysql.INTEGER(10, unsigned=True), nullable=False),
+            sa.Column('min_transfer_time', samysql.INTEGER(10, unsigned=True), nullable=False),
+            sa.Column('transfer_dist', samysql.INTEGER(11), nullable=False, default=0)
+            )
 
     # TODO(erchpito) consider a function that merely finds all legal transfer
     # for a given stop via DataFrame calculation
     # make a function to check lat lon difference, OPTIMIZE THIS
-    def transfers(self):
+    def transfers(self, refresh=True):
         """Loads the Transfers table into self.tables.
 
         Setups arguments for self.generate_table to match the description of
         the Transfers table as described in Task 2.
         """
         table_name = 'Transfers'
-        columns = ['from_agency_id', 'from_id', 'to_agency_id', 'to_id',
-                   'transfer_type', 'min_transfer_time', 'transfer_dist']
+        typing = {'from_agency_id': samysql.INTEGER(11),
+                  'from_id': samysql.INTEGER(10, unsigned=True),
+                  'to_agency_id': samysql.INTEGER(11),
+                  'to_id': samysql.INTEGER(10, unsigned=True),
+                  'transfer_type': samysql.INTEGER(10, unsigned=True),
+                  'min_transfer_time': samysql.INTEGER(10, unsigned=True),
+                  'transfer_dist': samysql.INTEGER(11)
+                  }
         table = None
         row_collector = []
 
         if 'Route_stop_seq' not in self.tables:
-            self.route_stop_seq()
+            self.route_stop_seq(refresh=False)
 
         max_distance = 100
 
@@ -827,13 +1092,28 @@ class TableUtility:
                     new_row['transfer_dist'] = transfer_dist
                     row_collector.append(new_row)
 
-        self.generate_table(table_name, table, transfers_row_func,
-                            rows=self.tables['Route_stop_seq'],
+        self.generate_table(table_name, table, transfers_row_func, typing,
+                            refresh, rows=self.tables['Route_stop_seq'],
                             row_collector=row_collector)
 
     # MARK: TASK 3
 
-    def gps_fixes(self):
+    def gps_fixes_definition(self, metadata):
+        return sa.Table(
+            'gps_fixes', metadata,
+            sa.Column('agency_id', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('veh_id', samysql.INTEGER(11), nullable=False, primary_key=True, key='veh_id'),
+            sa.Column('RecordedDate', samysql.DATE(), nullable=False, primary_key=True, key='RecordedDate'),
+            sa.Column('RecordedTime', samysql.TIME(), nullable=False, primary_key=True),
+            sa.Column('UTC_at_date', samysql.DATE(), nullable=False),
+            sa.Column('UTC_at_time', samysql.TIME(), nullable=False),
+            sa.Column('latitude', samysql.DOUBLE(), nullable=False),
+            sa.Column('longitude', samysql.DOUBLE(), nullable=False),
+            sa.Column('speed', samysql.DOUBLE(), nullable=False),
+            sa.Column('course', samysql.DOUBLE(), nullable=False)
+            )
+
+    def gps_fixes(self, refresh=True):
         """Loads the gps_fixes table into self.tables (optional).
 
         Setups arguments for self.generate_table to match the description of
@@ -842,13 +1122,22 @@ class TableUtility:
         table_name = 'gps_fixes'
         if (self.vehicle_position_feed is None or
            not self.vehicle_position_feed.entity):
-            logging.warning(('FAILURE could not compute {0} without the'
+            logging.warning(('FAILURE could not compute {0} without the '
                              '\'{1}\' feed').format(table_name,
                                                     'vehicle positions'))
             self.tables[table_name] = None
             return
-        columns = ['agency_id', 'veh_id', 'RecordedDate', 'RecordedTime',
-                   'UTC_at_date', 'latitude', 'longitude', 'speed', 'course']
+        typing = {'agency_id': samysql.INTEGER(10, unsigned=True),
+                  'veh_id': samysql.INTEGER(11),
+                  'RecordedDate': samysql.DATE(),
+                  'RecordedTime': samysql.TIME(),
+                  'UTC_at_date': samysql.DATE(),
+                  'UTC_at_time': samysql.TIME(),
+                  'latitude': samysql.DOUBLE(),
+                  'longitude': samysql.DOUBLE(),
+                  'speed': samysql.DOUBLE(),
+                  'course': samysql.DOUBLE()
+                  }
         table = None
         row_collector = []
 
@@ -887,39 +1176,72 @@ class TableUtility:
             if (trip and 'trip_id' in trip) and (vehicle and 'id' in vehicle):
                 self.trip2vehicle[trip['trip_id']] = vehicle['id']
 
-        self.generate_table(table_name, table, gps_fixes_row_func,
+        self.generate_table(table_name, table, gps_fixes_row_func, typing,
+                            refresh,
                             entities=self.vehicle_position_feed.entity,
                             row_collector=row_collector)
 
-    # TODO(erchpito) is this suppose to contain a row for every stop, or just
-    # ones that have updated times?
+    def transit_eta_definition(self, metadata):
+        return sa.Table(
+            'TransitETA', metadata,
+            sa.Column('agency_id', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('RecordedDate', samysql.DATE(), nullable=False, primary_key=True, key='RecordedDate'),
+            sa.Column('RecordedTime', samysql.TIME(), nullable=False, primary_key=True),
+            sa.Column('veh_id', samysql.INTEGER(11), nullable=False, primary_key=True),
+            sa.Column('veh_lat', samysql.DOUBLE(), nullable=False),
+            sa.Column('veh_lon', samysql.DOUBLE(), nullable=False),
+            sa.Column('veh_speed', samysql.DOUBLE(), nullable=False),
+            sa.Column('veh_location_time', samysql.BIGINT(20), nullable=False),
+            sa.Column('route_short_name', samysql.VARCHAR(255), nullable=False, primary_key=True, key='route_short_name'),
+            sa.Column('route_dir', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('day', samysql.CHAR(7), nullable=False, primary_key=True),
+            sa.Column('run', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('pattern_id', samysql.VARCHAR(255), nullable=False),
+            sa.Column('stop_id', samysql.VARCHAR(255), nullable=False, key='stop_id'),
+            sa.Column('seq', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('ETA', samysql.TIME(), nullable=False, primary_key=True)
+            )
+
     # TODO(erchpito) how do we handle situations where the vehicle corrects
     # itself? do we update the entire table to reflect it caught up?
-    def transit_eta(self):
+    def transit_eta(self, refresh=True):
         """Loads the TransitETA table into self.tables.
 
         Setups arguments for self.generate_table to match the description of
         the TransitETA table as described in Task 3.
         """
         table_name = 'TransitETA'
-        columns = ['agency_id', 'RecordedDate', 'RecordedTime', 'veh_id',
-                   'veh_lat', 'veh_lon', 'veh_speed', 'veh_location_time',
-                   'route_short_name', 'route_dir', 'day', 'run', 'pattern_id',
-                   'stop_id', 'seq', 'ETA']
+        typing = {'agency_id': samysql.INTEGER(10, unsigned=True),
+                  'RecordedDate': samysql.DATE(),
+                  'RecordedTime': samysql.TIME(),
+                  'veh_id': samysql.INTEGER(11),
+                  'veh_lat': samysql.DOUBLE(),
+                  'veh_lon': samysql.DOUBLE(),
+                  'veh_speed': samysql.DOUBLE(),
+                  'veh_location_time': samysql.BIGINT(20),
+                  'route_short_name': samysql.VARCHAR(255),
+                  'route_dir': samysql.INTEGER(10, unsigned=True),
+                  'day': samysql.CHAR(7),
+                  'run': samysql.INTEGER(10, unsigned=True),
+                  'pattern_id': samysql.VARCHAR(255),
+                  'stop_id': samysql.VARCHAR(255),
+                  'seq': samysql.INTEGER(10, unsigned=True),
+                  'ETA': samysql.TIME()
+                  }
         table = None
         row_collector = []
 
         if 'RunPattern' not in self.tables:
-            self.run_pattern()
+            self.run_pattern(refresh=False)
         if 'gps_fixes' not in self.tables:
-            self.gps_fixes()
+            self.gps_fixes(refresh=False)
 
         def transit_eta_row_func(entity):
             update = gtfsutility.TripUpdate(entity.trip_update)
             trip_descriptor = update.get_trip_descriptor()
             stop_time_updates = update.get_stop_time_updates()
 
-            trip_id = trip_descriptor['trip_id']
+            trip_id = str(trip_descriptor['trip_id'])
             runPattern_entry = self.tables['RunPattern'].loc[
                 self.tables['RunPattern']['trip_id'] == trip_id].iloc[0]
 
@@ -937,18 +1259,18 @@ class TableUtility:
                 timestamp = time.mktime(s.timetuple())
             else:
                 gps_fixes_entry = {}
-                gps_fixes_entry['veh_id'] = None
-                gps_fixes_entry['veh_lat'] = None
-                gps_fixes_entry['veh_lon'] = None
-                gps_fixes_entry['veh_speed'] = None
-                timestamp = None
+                gps_fixes_entry['veh_id'] = 0
+                gps_fixes_entry['veh_lat'] = 0
+                gps_fixes_entry['veh_lon'] = 0
+                gps_fixes_entry['veh_speed'] = 0
+                timestamp = 0
 
             # Given a Trip Update, find and iterate through the stops along
             # that trip, starting with the ith stop in the first Stop Time
             # Update.
 
             trip_id_block = self.static_feed['stop_times'].loc[
-                self.static_feed['stop_times']['trip_id'] == trip_id]
+                self.static_feed['stop_times']['trip_id'].apply(str) == trip_id]
             i = 0
             while i < len(stop_time_updates):
                 stop_time_update = stop_time_updates[i]
@@ -966,7 +1288,7 @@ class TableUtility:
                     if 'delay' in time_diff:
                         delay = timedelta(seconds=time_diff['delay'])
                     else:  # it would seem this is stop_sequence specific
-                        delay_time = datetime.datetime.fromtimestamp(
+                        delay_time = datetime.fromtimestamp(
                             int(time_diff['time']))
                         schedule_time = self.datetimeFromHMS(
                             trip_id_block.iloc[stop_seq - 1]['departure_time'])
@@ -976,7 +1298,7 @@ class TableUtility:
                     while stop_seq < stop_seq_til:
                         stop_times_entry = trip_id_block.iloc[stop_seq - 1]
                         new_row = {}
-                        new_row['agency_id'] = self.agencyID
+                        new_row['agency_id'] = int(self.agencyID)
                         new_row['RecordedDate'] = str(
                             datetime.now().strftime('%Y-%m-%d'))
                         new_row['RecordedTime'] = str(
@@ -988,15 +1310,14 @@ class TableUtility:
                         new_row['veh_speed'] = gps_fixes_entry['veh_speed']
                         new_row['veh_location_time'] = timestamp
 
-                        new_row['route_short_name'] = runPattern_entry[
-                            'route_short_name']
-                        new_row['route_dir'] = runPattern_entry['route_dir']
-                        new_row['day'] = runPattern_entry['day']
-                        new_row['run'] = runPattern_entry['run']
-                        new_row['pattern_id'] = runPattern_entry['pattern_id']
+                        new_row['route_short_name'] = str(runPattern_entry['route_short_name'])
+                        new_row['route_dir'] = int(runPattern_entry['route_dir'])
+                        new_row['day'] = str(runPattern_entry['day'])
+                        new_row['run'] = int(runPattern_entry['run'])
+                        new_row['pattern_id'] = str(runPattern_entry['pattern_id'])
 
-                        new_row['stop_id'] = stop_times_entry['stop_id']
-                        new_row['seq'] = stop_seq
+                        new_row['stop_id'] = str(stop_times_entry['stop_id'])
+                        new_row['seq'] = int(stop_seq)
                         new_row['ETA'] = (self.datetimeFromHMS(
                                           stop_times_entry['departure_time']) +
                                           delay).strftime('%H:%M:%S')
@@ -1004,6 +1325,6 @@ class TableUtility:
                         stop_seq += 1
                 i += 1
 
-        self.generate_table(table_name, table, transit_eta_row_func,
-                            entities=self.trip_update_feed.entity,
+        self.generate_table(table_name, table, transit_eta_row_func, typing,
+                            refresh, entities=self.trip_update_feed.entity,
                             row_collector=row_collector)

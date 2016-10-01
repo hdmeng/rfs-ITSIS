@@ -52,7 +52,7 @@ class TripUpdate:
                 gtfs_realtime_pb2.TripDescriptor.SCHEDULED
             )
 
-        logging.debug(td_fv)
+        # logging.debug(td_fv)
 
         return td_fv
 
@@ -83,7 +83,7 @@ class TripUpdate:
                     gtfs_realtime_pb2.TripUpdate.StopTimeUpdate.SCHEDULED
                 )
 
-        logging.debug(stu_fv)
+        # logging.debug(stu_fv)
 
         return stu_fv
 
@@ -148,7 +148,7 @@ class VehiclePosition:
                     gtfs_realtime_pb2.TripDescriptor.SCHEDULED
                 )
 
-        logging.debug(trip_dict)
+        # logging.debug(trip_dict)
 
         return trip_dict
 
@@ -164,7 +164,7 @@ class VehiclePosition:
                         position_dict[f].isdigit()):
                     position_dict[f] = int(position_dict[f])
 
-        logging.debug(position_dict)
+        # logging.debug(position_dict)
 
         return position_dict
 
@@ -179,7 +179,7 @@ class VehiclePosition:
                 if type(vehicle_dict[f]) == str and vehicle_dict[f].isdigit():
                     vehicle_dict[f] = float(vehicle_dict[f])
 
-        logging.debug(vehicle_dict)
+        # logging.debug(vehicle_dict)
 
         return vehicle_dict
 
