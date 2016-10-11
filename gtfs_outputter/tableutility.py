@@ -13,6 +13,7 @@ import MySQLdb
 import numpy as np
 import pandas as pd
 import pytz
+import sqlalchemy as sa
 import sqlalchemy.dialects.mysql as samysql
 
 import dataframeutility
@@ -190,6 +191,7 @@ class TableUtility:
                 i, 'agency_phone', self.static_feed['agency'], default='N/A'))
             table.set_value(i, 'timezone_name', row['agency_timezone'])
 
+        dataframeutility.setup_table(table_name, self.datapath, self.agency_definition)
         self.generate_table(table_name, table, agency_row_func, typing,
                             refresh, rows=self.static_feed['agency'])
 
@@ -265,6 +267,7 @@ class TableUtility:
                 new_row['version'] = self.checksum
                 row_collector.append(new_row)
 
+        dataframeutility.setup_table(table_name, self.datapath, self.routes_definition)
         self.generate_table(table_name, table, routes_row_func, typing,
                             refresh, rows=self.static_feed['routes'],
                             row_collector=row_collector)
@@ -336,6 +339,7 @@ class TableUtility:
                     cast=int, default=0))
             table.set_value(i, 'version', self.checksum)
 
+        dataframeutility.setup_table(table_name, self.datapath, self.stops_definition)
         self.generate_table(table_name, table, stops_row_func, typing,
                             refresh, rows=self.static_feed['stops'])
 
@@ -370,6 +374,7 @@ class TableUtility:
             new_row['shape_id'] = self.pattern2shape[entity[1]]
             row_collector.append(new_row)
 
+        dataframeutility.setup_table(table_name, self.datapath, self.trip_pattern_shape_definition)
         self.generate_table(table_name, table, trip_pattern_shape_row_func, typing,
                             refresh, entities=self.trip2pattern.items(),
                             row_collector=row_collector)
@@ -482,6 +487,7 @@ class TableUtility:
                                                       else subrow['shape_id'])
                 self.trip2pattern[str(trip_id)] = pattern_id
 
+        dataframeutility.setup_table(table_name, self.datapath, self.route_stop_seq_definition)
         self.generate_table(table_name, table, route_stop_seq_row_func, typing,
                             refresh, rows=route_rows,
                             row_collector=row_collector)
@@ -591,6 +597,7 @@ class TableUtility:
             table.set_value(i, 'trip_id', str(row['trip_id']))
             table.set_value(i, 'version', self.checksum)
 
+        dataframeutility.setup_table(table_name, self.datapath, self.run_pattern_definition)
         self.generate_table(table_name, table, runPattern_row_func, typing,
                             refresh, rows=trip_rows)
 
@@ -704,6 +711,7 @@ class TableUtility:
                                 i, 'stop_headsign',
                                 self.static_feed['stop_times'], default='N/A'))
 
+        dataframeutility.setup_table(table_name, self.datapath, self.schedules_definition)
         self.generate_table(table_name, table, schedules_row_func, typing,
                             refresh, rows=self.static_feed['stop_times'])
 
@@ -804,6 +812,7 @@ class TableUtility:
                 last_point = (subrow['shape_pt_lat'], subrow['shape_pt_lon'])
                 row_collector.append(new_row)
 
+        dataframeutility.setup_table(table_name, self.datapath, self.route_point_seq_definition)
         self.generate_table(table_name, table, route_point_seq_row_func,
                             typing, refresh,
                             rows=self.tables['Route_stop_seq'],
@@ -858,6 +867,7 @@ class TableUtility:
             new_row['version'] = self.checksum
             row_collector.append(new_row)
 
+        dataframeutility.setup_table(table_name, self.datapath, self.points_definition)
         self.generate_table(table_name, table, points_row_func, typing,
                             refresh, rows=self.static_feed['shapes'],
                             row_collector=row_collector)
@@ -918,6 +928,7 @@ class TableUtility:
         def fare_row_func(i, row):
             pass
 
+        # dataframeutility.setup_table(table_name, self.datapath, self.fare_definition)
         # self.generate_table(table_name, table, fare_row_func, typing,
         #                     refresh, rows=self.static_feed['fare_rules'])
 
@@ -963,6 +974,7 @@ class TableUtility:
         def calendar_dates_row_func(i, row, lock=None):
             pass
 
+        # dataframeutility.setup_table(table_name, self.datapath, self.calendar_dates_definition)
         # self.generate_table(table_name, table, calendar_dates_row_func, typing,
         #                     refresh, rows=self.static_feed['calendar_dates'])
 
@@ -1092,6 +1104,7 @@ class TableUtility:
                     new_row['transfer_dist'] = transfer_dist
                     row_collector.append(new_row)
 
+        dataframeutility.setup_table(table_name, self.datapath, self.transfers_definition)
         self.generate_table(table_name, table, transfers_row_func, typing,
                             refresh, rows=self.tables['Route_stop_seq'],
                             row_collector=row_collector)
@@ -1176,6 +1189,7 @@ class TableUtility:
             if (trip and 'trip_id' in trip) and (vehicle and 'id' in vehicle):
                 self.trip2vehicle[trip['trip_id']] = vehicle['id']
 
+        dataframeutility.setup_table(table_name, self.datapath, self.gps_fixes_definition)
         self.generate_table(table_name, table, gps_fixes_row_func, typing,
                             refresh,
                             entities=self.vehicle_position_feed.entity,
@@ -1325,6 +1339,7 @@ class TableUtility:
                         stop_seq += 1
                 i += 1
 
+        dataframeutility.setup_table(table_name, self.datapath, self.transit_eta_definition)
         self.generate_table(table_name, table, transit_eta_row_func, typing,
                             refresh, entities=self.trip_update_feed.entity,
                             row_collector=row_collector)

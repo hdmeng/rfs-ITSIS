@@ -59,6 +59,7 @@ def process_feeds(static_feed, checksum, trip_update_feed, alert_feed,
         datapath['conn'] = conn
     datapath['pathname'] = pathname
     datapath['engine'] = engine
+    datapath['metadata'] = sa.MetaData()
 
     tableUtility = tableutility.TableUtility(
         agencyID, routeID, static_feed, checksum, trip_update_feed, alert_feed,

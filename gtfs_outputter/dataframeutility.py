@@ -49,6 +49,10 @@ def can_read_dataframe(df_name, datapath):
                 logging.debug('MySQL Error: {0}'.format(str(e)))
             sys.exit(1)
 
+def setup_table(df_name, datapath, definition):
+    if datapath['pathname'] is None and not can_read_dataframe(df_name, datapath):
+        table = definition(datapath['metadata'])
+        table.create(datapath['engine'])
 
 def read_dataframe(df_name, datapath):
     if datapath['pathname'] is not None:
