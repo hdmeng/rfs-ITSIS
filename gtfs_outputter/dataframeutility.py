@@ -64,9 +64,10 @@ def read_dataframe(df_name, datapath):
         return sql2df(df_name, datapath['engine'])
 
 
-def write_dataframe(dataframe, df_name, datapath, typing, agency_id):
+def write_dataframe(dataframe, df_name, datapath, typing, agency_id, clear):
     if datapath['pathname'] is not None:
         dataframe.to_csv(datapath['pathname'] + df_name + '.csv', sep=',', index=False)
     else:
-        clear_agency(df_name, agency_id, datapath['engine'])
+        if clear:
+            clear_agency(df_name, agency_id, datapath['engine'])
         df2sql(dataframe, df_name, datapath['engine'], typing)

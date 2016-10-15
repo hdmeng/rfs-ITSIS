@@ -94,7 +94,7 @@ class TableUtility:
         return n_time + delay
 
     def generate_table(self, table_name, table, setup_row_func, typing,
-                       refresh, rows=None, entities=None, row_collector=None):
+                       refresh, rows=None, entities=None, row_collector=None, clear=True):
         """Loads the requested table into self.tables.
 
         If possible, the table will be fetched from a database or
@@ -142,7 +142,7 @@ class TableUtility:
 
             dataframeutility.write_dataframe(
                 self.tables[table_name], table_name, self.datapath, typing,
-                self.agencyID)
+                self.agencyID, clear)
         logging.debug('SUCCESS finished with {0}'.format(table_name))
 
     # MARK: TASK 1
@@ -1343,3 +1343,153 @@ class TableUtility:
         self.generate_table(table_name, table, transit_eta_row_func, typing,
                             refresh, entities=self.trip_update_feed.entity,
                             row_collector=row_collector)
+
+    def transit_eta_bart_definition(self, metadata):
+        return sa.Table(
+            'TransitETABART', metadata,
+            sa.Column('agency_id', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('RecordedDate', samysql.DATE(), nullable=False, primary_key=True, key='RecordedDate'),
+            sa.Column('RecordedTime', samysql.TIME(), nullable=False, primary_key=True),
+            sa.Column('veh_id', samysql.INTEGER(11), nullable=False, primary_key=True),
+            sa.Column('veh_lat', samysql.DOUBLE(), nullable=False),
+            sa.Column('veh_lon', samysql.DOUBLE(), nullable=False),
+            sa.Column('veh_speed', samysql.DOUBLE(), nullable=False),
+            sa.Column('veh_location_time', samysql.BIGINT(20), nullable=False),
+            sa.Column('route_short_name', samysql.VARCHAR(255), nullable=False, primary_key=True, key='route_short_name'),
+            sa.Column('route_dir', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('day', samysql.CHAR(7), nullable=False, primary_key=True),
+            sa.Column('run', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('pattern_id', samysql.VARCHAR(255), nullable=False),
+            sa.Column('stop_id', samysql.VARCHAR(255), nullable=False, key='stop_id'),
+            sa.Column('seq', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
+            sa.Column('ETA', samysql.TIME(), nullable=False, primary_key=True)
+            )
+
+    # TODO(erchpito) how do we handle situations where the vehicle corrects
+    # itself? do we update the entire table to reflect it caught up?
+    def transit_eta_bart(self, refresh=True):
+        """Loads the TransitETABART table into self.tables.
+
+        Setups arguments for self.generate_table to match the description of
+        the TransitETA table as described in Task 3. However, this table is
+        dedicated to logging BART Trip Update feeds, without replacement.
+        """
+        table_name = 'TransitETABART'
+        typing = {'agency_id': samysql.INTEGER(10, unsigned=True),
+                  'RecordedDate': samysql.DATE(),
+                  'RecordedTime': samysql.TIME(),
+                  'veh_id': samysql.INTEGER(11),
+                  'veh_lat': samysql.DOUBLE(),
+                  'veh_lon': samysql.DOUBLE(),
+                  'veh_speed': samysql.DOUBLE(),
+                  'veh_location_time': samysql.BIGINT(20),
+                  'route_short_name': samysql.VARCHAR(255),
+                  'route_dir': samysql.INTEGER(10, unsigned=True),
+                  'day': samysql.CHAR(7),
+                  'run': samysql.INTEGER(10, unsigned=True),
+                  'pattern_id': samysql.VARCHAR(255),
+                  'stop_id': samysql.VARCHAR(255),
+                  'seq': samysql.INTEGER(10, unsigned=True),
+                  'ETA': samysql.TIME()
+                  }
+        table = None
+        row_collector = []
+
+        if 'RunPattern' not in self.tables:
+            self.run_pattern(refresh=False)
+        if 'gps_fixes' not in self.tables:
+            self.gps_fixes(refresh=False)
+
+        def transit_eta_bart_row_func(entity):
+            update = gtfsutility.TripUpdate(entity.trip_update)
+            trip_descriptor = update.get_trip_descriptor()
+            stop_time_updates = update.get_stop_time_updates()
+
+            trip_id = str(trip_descriptor['trip_id'])
+            runPattern_entry = self.tables['RunPattern'].loc[
+                self.tables['RunPattern']['trip_id'] == trip_id].iloc[0]
+
+            if self.tables['gps_fixes'] is not None:
+                # TODO(erchpito) trip_update can include the veh_id, not always
+                # an int
+                veh_id = int(self.trip2vehicle[trip_id])
+                gps_fixes_entry = self.tables['gps_fixes'].loc[
+                    self.tables['gps_fixes']['veh_id'] == veh_id].iloc[0]
+                s = datetime.strptime(
+                    '{0} {1}'.format(
+                        gps_fixes_entry['UTC_at_date'],
+                        gps_fixes_entry['UTC_at_time']),
+                    '%Y-%m-%d %H:%M:%S')
+                timestamp = time.mktime(s.timetuple())
+            else:
+                gps_fixes_entry = {}
+                gps_fixes_entry['veh_id'] = 0
+                gps_fixes_entry['veh_lat'] = 0
+                gps_fixes_entry['veh_lon'] = 0
+                gps_fixes_entry['veh_speed'] = 0
+                timestamp = 0
+
+            # Given a Trip Update, find and iterate through the stops along
+            # that trip, starting with the ith stop in the first Stop Time
+            # Update.
+
+            trip_id_block = self.static_feed['stop_times'].loc[
+                self.static_feed['stop_times']['trip_id'].apply(str) == trip_id]
+            i = 0
+            while i < len(stop_time_updates):
+                stop_time_update = stop_time_updates[i]
+                if ('departure' in stop_time_update or
+                   'arrival' in stop_time_update):
+                    stop_seq = stop_time_update['stop_sequence']
+                    stop_seq_til = (stop_time_updates[i + 1]['stop_sequence']
+                                    if i + 1 < len(stop_time_updates) else
+                                    len(trip_id_block) + 1)
+
+                    time_diff = stop_time_update[('departure' if 'departure' in
+                                                 stop_time_update else
+                                                 'arrival')]
+
+                    if 'delay' in time_diff:
+                        delay = timedelta(seconds=time_diff['delay'])
+                    else:  # it would seem this is stop_sequence specific
+                        delay_time = datetime.fromtimestamp(
+                            int(time_diff['time']))
+                        schedule_time = self.datetimeFromHMS(
+                            trip_id_block.iloc[stop_seq - 1]['departure_time'])
+                        delay = delay_time - schedule_time
+
+                    # this would ignore all stops until there's a delay
+                    while stop_seq < stop_seq_til:
+                        stop_times_entry = trip_id_block.iloc[stop_seq - 1]
+                        new_row = {}
+                        new_row['agency_id'] = int(self.agencyID)
+                        new_row['RecordedDate'] = str(
+                            datetime.now().strftime('%Y-%m-%d'))
+                        new_row['RecordedTime'] = str(
+                            datetime.now().strftime('%H:%M:%S'))
+
+                        new_row['veh_id'] = gps_fixes_entry['veh_id']
+                        new_row['veh_lat'] = gps_fixes_entry['veh_lat']
+                        new_row['veh_lon'] = gps_fixes_entry['veh_lon']
+                        new_row['veh_speed'] = gps_fixes_entry['veh_speed']
+                        new_row['veh_location_time'] = timestamp
+
+                        new_row['route_short_name'] = str(runPattern_entry['route_short_name'])
+                        new_row['route_dir'] = int(runPattern_entry['route_dir'])
+                        new_row['day'] = str(runPattern_entry['day'])
+                        new_row['run'] = int(runPattern_entry['run'])
+                        new_row['pattern_id'] = str(runPattern_entry['pattern_id'])
+
+                        new_row['stop_id'] = str(stop_times_entry['stop_id'])
+                        new_row['seq'] = int(stop_seq)
+                        new_row['ETA'] = (self.datetimeFromHMS(
+                                          stop_times_entry['departure_time']) +
+                                          delay).strftime('%H:%M:%S')
+                        row_collector.append(new_row)
+                        stop_seq += 1
+                i += 1
+
+        dataframeutility.setup_table(table_name, self.datapath, self.transit_eta_bart_definition)
+        self.generate_table(table_name, table, transit_eta_bart_row_func, typing,
+                            refresh, entities=self.trip_update_feed.entity,
+                            row_collector=row_collector, clear=False)

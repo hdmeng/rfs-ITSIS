@@ -30,13 +30,9 @@ def process_feeds(static_feed, checksum, trip_update_feed, alert_feed,
             os.makedirs(pathname)
     else:
         username = 'root'
-        password = '3EasSarcasEgot3'
+        password = 'PATH452RFS'
         host = 'localhost'
-        database = 'gtfs'
-        # username = 'root'
-        # password = 'PATH452RFS'
-        # host = 'localhost'
-        # database = 'PATHTransit'
+        database = 'PATHTransit'
 
         # username = 'root'
         # password = 'PATH452RFS'
@@ -91,6 +87,8 @@ def process_feeds(static_feed, checksum, trip_update_feed, alert_feed,
         tableUtility.gps_fixes()
     if 'transit_eta' in tables:
         tableUtility.transit_eta()
+    if 'transit_eta_bart' in tables:
+        tableUtility.transit_eta_bart()
     if 'conn' in datapath:
         datapath['conn'].close()
 
@@ -110,6 +108,7 @@ def main(argv):
     tables = ['agency', 'routes', 'stops', 'route_stop_seq', 'run_pattern',
               'schedules', 'route_point_seq', 'points', 'fare',
               'calendar_dates', 'transfers', 'gps_fixes', 'transit_eta']
+    experiment_tables = ['transit_eta_bart']
 
     if len(argv) < 2:
         logging.error(GENERATOR_AGENCY_ERROR_STRING)
@@ -136,7 +135,7 @@ def main(argv):
         refresh = True
     if '-t' in argv:
         buf = argv[argv.index('-t') + 1]
-        if buf[0] != '-' and buf in tables:
+        if buf[0] != '-' and (buf in tables or buf in experiment_tables):
             tables = [buf]
         else:
             logging.error(GENERATOR_TABLE_ERROR_STRING)
