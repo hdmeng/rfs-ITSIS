@@ -1350,11 +1350,6 @@ class TableUtility:
             sa.Column('agency_id', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
             sa.Column('RecordedDate', samysql.DATE(), nullable=False, primary_key=True, key='RecordedDate'),
             sa.Column('RecordedTime', samysql.TIME(), nullable=False, primary_key=True),
-            sa.Column('veh_id', samysql.INTEGER(11), nullable=False, primary_key=True),
-            sa.Column('veh_lat', samysql.DOUBLE(), nullable=False),
-            sa.Column('veh_lon', samysql.DOUBLE(), nullable=False),
-            sa.Column('veh_speed', samysql.DOUBLE(), nullable=False),
-            sa.Column('veh_location_time', samysql.BIGINT(20), nullable=False),
             sa.Column('route_short_name', samysql.VARCHAR(255), nullable=False, primary_key=True, key='route_short_name'),
             sa.Column('route_dir', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
             sa.Column('day', samysql.CHAR(7), nullable=False, primary_key=True),
@@ -1362,11 +1357,10 @@ class TableUtility:
             sa.Column('pattern_id', samysql.VARCHAR(255), nullable=False),
             sa.Column('stop_id', samysql.VARCHAR(255), nullable=False, key='stop_id'),
             sa.Column('seq', samysql.INTEGER(10, unsigned=True), nullable=False, primary_key=True),
-            sa.Column('ETA', samysql.TIME(), nullable=False, primary_key=True)
+            sa.Column('ETA', samysql.TIME(), nullable=False, primary_key=True),
+            sa.Column('STA', samysql.TIME(), nullable=False, primary_key=True),
             )
 
-    # TODO(erchpito) how do we handle situations where the vehicle corrects
-    # itself? do we update the entire table to reflect it caught up?
     def transit_eta_bart(self, refresh=True):
         """Loads the TransitETABART table into self.tables.
 
@@ -1378,11 +1372,6 @@ class TableUtility:
         typing = {'agency_id': samysql.INTEGER(10, unsigned=True),
                   'RecordedDate': samysql.DATE(),
                   'RecordedTime': samysql.TIME(),
-                  'veh_id': samysql.INTEGER(11),
-                  'veh_lat': samysql.DOUBLE(),
-                  'veh_lon': samysql.DOUBLE(),
-                  'veh_speed': samysql.DOUBLE(),
-                  'veh_location_time': samysql.BIGINT(20),
                   'route_short_name': samysql.VARCHAR(255),
                   'route_dir': samysql.INTEGER(10, unsigned=True),
                   'day': samysql.CHAR(7),
@@ -1390,7 +1379,8 @@ class TableUtility:
                   'pattern_id': samysql.VARCHAR(255),
                   'stop_id': samysql.VARCHAR(255),
                   'seq': samysql.INTEGER(10, unsigned=True),
-                  'ETA': samysql.TIME()
+                  'ETA': samysql.TIME(),
+                  'STA': samysql.TIME()
                   }
         table = None
         row_collector = []
@@ -1409,26 +1399,6 @@ class TableUtility:
             runPattern_entry = self.tables['RunPattern'].loc[
                 self.tables['RunPattern']['trip_id'] == trip_id].iloc[0]
 
-            if self.tables['gps_fixes'] is not None:
-                # TODO(erchpito) trip_update can include the veh_id, not always
-                # an int
-                veh_id = int(self.trip2vehicle[trip_id])
-                gps_fixes_entry = self.tables['gps_fixes'].loc[
-                    self.tables['gps_fixes']['veh_id'] == veh_id].iloc[0]
-                s = datetime.strptime(
-                    '{0} {1}'.format(
-                        gps_fixes_entry['UTC_at_date'],
-                        gps_fixes_entry['UTC_at_time']),
-                    '%Y-%m-%d %H:%M:%S')
-                timestamp = time.mktime(s.timetuple())
-            else:
-                gps_fixes_entry = {}
-                gps_fixes_entry['veh_id'] = 0
-                gps_fixes_entry['veh_lat'] = 0
-                gps_fixes_entry['veh_lon'] = 0
-                gps_fixes_entry['veh_speed'] = 0
-                timestamp = 0
-
             # Given a Trip Update, find and iterate through the stops along
             # that trip, starting with the ith stop in the first Stop Time
             # Update.
@@ -1436,29 +1406,28 @@ class TableUtility:
             trip_id_block = self.static_feed['stop_times'].loc[
                 self.static_feed['stop_times']['trip_id'].apply(str) == trip_id]
             i = 0
+            no_delay = timedelta(seconds=0)
             while i < len(stop_time_updates):
                 stop_time_update = stop_time_updates[i]
-                if ('departure' in stop_time_update or
-                   'arrival' in stop_time_update):
+                if ('departure' in stop_time_update or 'arrival' in stop_time_update):
                     stop_seq = stop_time_update['stop_sequence']
-                    stop_seq_til = (stop_time_updates[i + 1]['stop_sequence']
-                                    if i + 1 < len(stop_time_updates) else
-                                    len(trip_id_block) + 1)
+                    stop_seq_til = (stop_time_updates[i + 1]['stop_sequence'] if i + 1 < len(stop_time_updates) else len(trip_id_block) + 1)
 
-                    time_diff = stop_time_update[('departure' if 'departure' in
-                                                 stop_time_update else
-                                                 'arrival')]
+                    time_diff = stop_time_update[('departure' if 'departure' in stop_time_update else 'arrival')]
 
                     if 'delay' in time_diff:
                         delay = timedelta(seconds=time_diff['delay'])
                     else:  # it would seem this is stop_sequence specific
-                        delay_time = datetime.fromtimestamp(
-                            int(time_diff['time']))
-                        schedule_time = self.datetimeFromHMS(
-                            trip_id_block.iloc[stop_seq - 1]['departure_time'])
+                        delay_time = datetime.fromtimestamp(int(time_diff['time']))
+                        schedule_time = self.datetimeFromHMS(trip_id_block.iloc[stop_seq - 1]['departure_time'])
                         delay = delay_time - schedule_time
 
-                    # this would ignore all stops until there's a delay
+                    # don't add entries if there's no delay
+                    if delay == no_delay:
+                        stop_seq = stop_seq_til
+                        i += 1
+                        continue
+
                     while stop_seq < stop_seq_til:
                         stop_times_entry = trip_id_block.iloc[stop_seq - 1]
                         new_row = {}
@@ -1468,12 +1437,6 @@ class TableUtility:
                         new_row['RecordedTime'] = str(
                             datetime.now().strftime('%H:%M:%S'))
 
-                        new_row['veh_id'] = gps_fixes_entry['veh_id']
-                        new_row['veh_lat'] = gps_fixes_entry['veh_lat']
-                        new_row['veh_lon'] = gps_fixes_entry['veh_lon']
-                        new_row['veh_speed'] = gps_fixes_entry['veh_speed']
-                        new_row['veh_location_time'] = timestamp
-
                         new_row['route_short_name'] = str(runPattern_entry['route_short_name'])
                         new_row['route_dir'] = int(runPattern_entry['route_dir'])
                         new_row['day'] = str(runPattern_entry['day'])
@@ -1482,9 +1445,8 @@ class TableUtility:
 
                         new_row['stop_id'] = str(stop_times_entry['stop_id'])
                         new_row['seq'] = int(stop_seq)
-                        new_row['ETA'] = (self.datetimeFromHMS(
-                                          stop_times_entry['departure_time']) +
-                                          delay).strftime('%H:%M:%S')
+                        new_row['ETA'] = (self.datetimeFromHMS(stop_times_entry['departure_time']) + delay).strftime('%H:%M:%S')
+                        new_row['STA'] = stop_times_entry['departure_time']
                         row_collector.append(new_row)
                         stop_seq += 1
                 i += 1
