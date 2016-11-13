@@ -4,9 +4,10 @@ import code
 import getpass
 import logging
 import os
+from os import path
+from slacker import Slacker
 import sqlalchemy as sa
 import sys
-from os import path
 
 import gtfsutility
 import tableutility
@@ -47,12 +48,36 @@ def process_feeds(static_feed, checksum, trip_update_feed, alert_feed,
 
         engine = sa.create_engine('mysql://{0}:{1}@{2}/{3}'.format(
             username, password, host, database))
+
+        crashpath = './crashed/'
+        if not path.exists(crashpath):
+            os.makedirs(crashpath)
+        if not path.exists(crashpath + 'crashfile.txt'):
+            with open(crashpath + 'crashfile.txt', 'w+') as crashfile:
+                crashfile.write('False')
+
         try:
             conn = engine.connect()
-        except:
-            logging.error('invalid credentials for database')
+        except sa.exc.OperationalError as e:
+            error_code = e.orig.args[0]
+            if error_code == 2002:
+                logging.error('unable to reach database')
+
+                with open(crashpath + 'crashfile.txt', 'r+') as crashfile:
+                    state = crashfile.read()
+                    if state == 'False':
+                        slack = Slacker(os.environ.get('SQUEAKQL_BOT_TOKEN'))
+                        slack.chat.post_message('#general', '<!channel> MySQL database has crashed', as_user=True)
+                        crashfile.seek(0)
+                        crashfile.write('True')
+                        crashfile.truncate()
+            else:
+                logging.error('invalid credentials for database')
             sys.exit(1)
         datapath['conn'] = conn
+        with open(crashpath + 'crashfile.txt', 'w+') as crashfile:
+            crashfile.write('False')
+
     datapath['pathname'] = pathname
     datapath['engine'] = engine
     datapath['metadata'] = sa.MetaData()
