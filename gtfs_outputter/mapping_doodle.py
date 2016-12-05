@@ -128,8 +128,8 @@ shapes = static_feed['shapes']
 stops = static_feed['stops']
 
 shape_id = None
-for _, row in shapes.drop_duplicates(['shape_pt_lat', 'shape_pt_lon']).iterrows():
-    if row['shape_id'] != shape_id:
+for _, row in shapes.iterrows():
+    if str(row['shape_id']) != shape_id:
         if shape_id:
             m.plot(lats, lons, edge_width=2, edge_alpha=0.5)
         lats = []
