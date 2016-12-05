@@ -114,6 +114,8 @@ def process_feeds(static_feed, checksum, trip_update_feed, alert_feed,
         tableUtility.transit_eta()
     if 'transit_eta_bart' in tables:
         tableUtility.transit_eta_bart()
+    if 'transit_eta_tri_delta' in tables:
+        tableUtility.transit_eta_tri_delta()
     if 'conn' in datapath:
         datapath['conn'].close()
 
@@ -133,7 +135,7 @@ def main(argv):
     tables = ['agency', 'routes', 'stops', 'route_stop_seq', 'run_pattern',
               'schedules', 'route_point_seq', 'points', 'fare',
               'calendar_dates', 'transfers', 'gps_fixes', 'transit_eta']
-    experiment_tables = ['transit_eta_bart']
+    experiment_tables = ['transit_eta_bart', 'transit_eta_tri_delta']
 
     if len(argv) < 2:
         logging.error(GENERATOR_AGENCY_ERROR_STRING)
