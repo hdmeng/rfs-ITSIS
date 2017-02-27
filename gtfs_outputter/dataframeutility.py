@@ -15,6 +15,14 @@ def df2sql(dataframe, df_name, engine, typing):
     dataframe.to_sql(df_name, engine, chunksize=1000, if_exists='append',
                      index=False, dtype=typing)
 
+def df2sql_update(dataframe, df_name, engine, typing, update_columns):
+    dataframe.to_sql('TempTable', engine, chunksize=1000, if_exists='append', index=False, dtype=typing)
+    update_str = ''
+    for col in update_columns:
+        update_str += '{0}.{1} = TempTable.{1}, '.format(df_name, col)
+    update_str = update_str[:-2]
+    engine.execute('insert into {0} select * from TempTable on duplicate key update {1}'.format(df_name, update_str))
+    engine.execute('drop table TempTable')
 
 def sql2df(df_name, engine):
     df = pd.read_sql_table(df_name, engine)
@@ -64,10 +72,13 @@ def read_dataframe(df_name, datapath):
         return sql2df(df_name, datapath['engine'])
 
 
-def write_dataframe(dataframe, df_name, datapath, typing, agency_id, clear):
+def write_dataframe(dataframe, df_name, datapath, typing, agency_id, clear, update_columns):
     if datapath['pathname'] is not None:
         dataframe.to_csv(datapath['pathname'] + df_name + '.csv', sep=',', index=False)
     else:
         if clear:
             clear_agency(df_name, agency_id, datapath['engine'])
-        df2sql(dataframe, df_name, datapath['engine'], typing)
+        if update_columns:
+            df2sql_update(dataframe, df_name, datapath['engine'], typing, update_columns)
+        else:
+            df2sql(dataframe, df_name, datapath['engine'], typing)
