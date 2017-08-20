@@ -22,7 +22,7 @@ agency_dict = {
                   'http://70.232.147.132/rtt/public/utility/gtfs.aspx',
                   'http://70.232.147.132/rtt/public/utility/gtfsrealtime.aspx/alert',
                   'http://70.232.147.132/rtt/public/utility/gtfsrealtime.aspx/tripupdate',
-                  None],
+                  'http://api.transitime.org/api/v1/key/5ec0de94/agency/tridelta/command/gtfs-rt/vehiclePositions'],
     'vta': [10,
             'http://api.511.org/transit/datafeeds?api_key=b5cb0334-749b-40ee-bcfb-98338d3ec5fc&operator_id=SC',
             None,

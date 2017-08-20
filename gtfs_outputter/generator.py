@@ -184,6 +184,9 @@ def main(argv):
     alert_feed = gtfsutility.get_realtime(agency, mode='alert')
     vehicle_position_feed = gtfsutility.get_realtime(agency,
                                                      mode='vehicle_position')
+    # print(vehicle_position_feed)
+    print(trip_update_feed)
+    sys.exit(0)
 
     process_feeds(static_feed, checksum, trip_update_feed, alert_feed,
                   vehicle_position_feed, agencyID, routeID, tables, local,
